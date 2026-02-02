@@ -3,10 +3,11 @@ import type { StatusUpdate } from '../types'
 interface Props {
   status: StatusUpdate | null
   upload: { state: string; message: string; current_page: number; total_pages: number } | null
+  uploadId: string | null
   onResume?: () => void
 }
 
-export function ProgressCard({ status, upload, onResume }: Props) {
+export function ProgressCard({ status, upload, uploadId, onResume }: Props) {
   const s = status || upload
   if (!s) return null
 
@@ -27,12 +28,20 @@ export function ProgressCard({ status, upload, onResume }: Props) {
     <div className="rounded-lg bg-white p-4 shadow-sm">
       <div className="mb-1 flex items-center justify-between">
         <span className="text-sm font-semibold">{title}</span>
-        {isStale && onResume && (
-          <button onClick={onResume}
-            className="rounded bg-blue-500 px-3 py-1 text-[11px] font-semibold text-white transition-colors hover:bg-blue-600">
-            Resume
-          </button>
-        )}
+        <div className="flex gap-1.5">
+          {isStale && onResume && (
+            <button onClick={onResume}
+              className="rounded bg-blue-500 px-3 py-1 text-[11px] font-semibold text-white transition-colors hover:bg-blue-600">
+              Resume
+            </button>
+          )}
+          {isDone && uploadId && (
+            <a href={`/api/uploads/${uploadId}/markdown`}
+              className="rounded border border-gray-200 bg-white px-3 py-1 text-[11px] font-medium text-gray-600 transition-colors hover:bg-gray-50">
+              Download All
+            </a>
+          )}
+        </div>
       </div>
       <div className="my-2 h-1.5 overflow-hidden rounded-full bg-gray-200">
         <div className={`h-full rounded-full transition-all duration-300 ${barColor}`}

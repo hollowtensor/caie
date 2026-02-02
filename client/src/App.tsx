@@ -83,7 +83,7 @@ export default function App() {
     </div>
   ) : (
     <div className="flex flex-1 flex-col gap-3">
-      <ProgressCard status={status} upload={activeUpload} onResume={handleResume} />
+      <ProgressCard status={status} upload={activeUpload} uploadId={activeId} onResume={handleResume} />
       {activePage && activeId && (
         <MarkdownViewer uploadId={activeId} pageNum={activePage} />
       )}

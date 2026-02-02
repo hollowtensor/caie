@@ -1,4 +1,4 @@
-import type { Upload, Page, PageState } from './types'
+import type { Upload, Page, PageState, PageTables } from './types'
 
 export async function fetchUploads(): Promise<Upload[]> {
   const res = await fetch('/api/uploads')
@@ -35,5 +35,10 @@ export async function resumeUpload(id: string): Promise<void> {
 
 export async function fetchPageMarkdown(id: string, pageNum: number): Promise<Page> {
   const res = await fetch(`/api/uploads/${id}/page/${pageNum}`)
+  return res.json()
+}
+
+export async function fetchPageTables(id: string, pageNum: number): Promise<PageTables> {
+  const res = await fetch(`/api/uploads/${id}/page/${pageNum}/tables`)
   return res.json()
 }

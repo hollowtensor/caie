@@ -30,3 +30,16 @@ export interface StatusUpdate {
   current_page: number
   total_pages: number
 }
+
+export interface PageTable {
+  index: number
+  columns: string[]
+  display_columns: string[]
+  rows: string[][]
+}
+
+export interface PageTables {
+  page_num: number
+  headings: string[]
+  tables: PageTable[]
+}
