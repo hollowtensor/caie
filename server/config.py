@@ -14,3 +14,7 @@ for d in (DATA_DIR, PDF_DIR, PAGES_DIR, OUTPUT_DIR):
 
 # Loaded from env (.env via dotenv), overridable via CLI --server-url
 SERVER_URL: str = os.environ.get("LIGHTONOCR_SERVER_URL", "http://localhost:8000/v1")
+
+# VLM for table validation (LM Studio / RunPod)
+VLM_SERVER_URL: str = os.environ.get("VLM_SERVER_URL", "http://localhost:1234/v1")
+VLM_MODEL: str = os.environ.get("VLM_MODEL", "qwen/qwen3-vl-8b")

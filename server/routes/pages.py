@@ -1,15 +1,21 @@
 from __future__ import annotations
 
+import base64
 import csv
+import logging
 import os
 import re
-from io import StringIO
+from io import BytesIO, StringIO
 
+import httpx
 from flask import Blueprint, Response, jsonify, request, send_from_directory
+from PIL import Image
 
-from ..config import PAGES_DIR
+from ..config import PAGES_DIR, VLM_MODEL, VLM_SERVER_URL
 from ..db import db_get, db_get_page, db_page_states, get_db
 from ..utils.tables import extract_tables
+
+log = logging.getLogger(__name__)
 
 bp = Blueprint("pages", __name__)
 
@@ -153,3 +159,147 @@ def page_table_csv(uid: str, page_num: int):
             "Content-Disposition": f'attachment; filename="page{page_num}_table{table_idx + 1}.csv"'
         },
     )
+
+
+# ---------- VLM Table Validation ----------
+
+def _get_table_blocks(markdown: str) -> list[tuple[int, int, str]]:
+    """Return list of (start, end, html) for each <table>...</table> in markdown."""
+    return [(m.start(), m.end(), m.group()) for m in re.finditer(
+        r"<table[\s\S]*?</table>", markdown, re.IGNORECASE
+    )]
+
+
+def _image_to_data_uri(path: str) -> str:
+    """Load a PNG, convert to JPEG base64 data URI."""
+    img = Image.open(path).convert("RGB")
+    buf = BytesIO()
+    img.save(buf, format="JPEG", quality=90)
+    b64 = base64.b64encode(buf.getvalue()).decode()
+    return f"data:image/jpeg;base64,{b64}"
+
+
+def _find_heading_before_table(markdown: str, table_start: int) -> str:
+    """Find the nearest markdown heading before the given position."""
+    text_before = markdown[:table_start]
+    matches = list(re.finditer(r"^#+\s+(.+)", text_before, re.MULTILINE))
+    if matches:
+        return matches[-1].group(1).strip()
+    return ""
+
+
+def _call_vlm(image_path: str, heading: str) -> str:
+    """Send page image to VLM and ask it to OCR a specific table from scratch."""
+    image_uri = _image_to_data_uri(image_path)
+
+    table_hint = f'The table is under the heading/section: "{heading}"' if heading else "Extract the main table"
+
+    prompt = (
+        f"Look at this page image. {table_hint}.\n\n"
+        "Your task: Read this table directly from the image and output it as clean HTML.\n\n"
+        "RULES:\n"
+        "- Read every cell value exactly as shown in the image.\n"
+        "- Use proper <table>, <thead>, <tbody>, <tr>, <th>, <td> tags.\n"
+        "- Use colspan/rowspan where the image shows merged cells.\n"
+        "- Output ONLY the <table>...</table> HTML, nothing else.\n"
+    )
+
+    payload = {
+        "model": VLM_MODEL,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": image_uri}},
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        ],
+        "max_tokens": 8192,
+        "temperature": 0.0,
+        "stream": False,
+    }
+
+    resp = httpx.post(
+        f"{VLM_SERVER_URL}/chat/completions",
+        json=payload,
+        timeout=300.0,
+    )
+    resp.raise_for_status()
+    content = resp.json()["choices"][0]["message"]["content"]
+
+    # Extract <table>...</table> from response
+    m = re.search(r"<table[\s\S]*?</table>", content, re.IGNORECASE)
+    if m:
+        return m.group()
+    return content
+
+
+@bp.route("/api/uploads/<uid>/page/<int:page_num>/validate-table", methods=["POST"])
+def validate_table(uid: str, page_num: int):
+    body = request.get_json(force=True) or {}
+    table_index = body.get("table_index", 0)
+
+    p = db_get_page(uid, page_num)
+    if not p:
+        return jsonify({"error": "Page not found"}), 404
+
+    md = p.get("markdown") or ""
+    blocks = _get_table_blocks(md)
+    if table_index < 0 or table_index >= len(blocks):
+        return jsonify({"error": "Table index out of range"}), 404
+
+    original_html = blocks[table_index][2]
+    heading = _find_heading_before_table(md, blocks[table_index][0])
+
+    # Find page image
+    image_path = os.path.join(PAGES_DIR, uid, f"page_{page_num:03d}.png")
+    if not os.path.exists(image_path):
+        return jsonify({"error": "Page image not found"}), 404
+
+    try:
+        corrected_html = _call_vlm(image_path, heading)
+    except Exception as e:
+        log.exception("VLM call failed")
+        return jsonify({"error": f"VLM error: {e}"}), 502
+
+    return jsonify({
+        "original": original_html,
+        "corrected": corrected_html,
+    })
+
+
+@bp.route("/api/uploads/<uid>/page/<int:page_num>/apply-correction", methods=["POST"])
+def apply_correction(uid: str, page_num: int):
+    body = request.get_json(force=True) or {}
+    table_index = body.get("table_index")
+    corrected_table = body.get("corrected_table")
+
+    if table_index is None or not corrected_table:
+        return jsonify({"error": "table_index and corrected_table required"}), 400
+
+    p = db_get_page(uid, page_num)
+    if not p:
+        return jsonify({"error": "Page not found"}), 404
+
+    md = p.get("markdown") or ""
+    blocks = _get_table_blocks(md)
+    if table_index < 0 or table_index >= len(blocks):
+        return jsonify({"error": "Table index out of range"}), 404
+
+    # Replace the specific table in the markdown
+    start, end, _ = blocks[table_index]
+    new_md = md[:start] + corrected_table + md[end:]
+
+    # Update DB
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE pages SET markdown=? WHERE upload_id=? AND page_num=?",
+            (new_md, uid, page_num),
+        )
+
+    # Re-run auto-extract
+    from .extract import run_auto_extract
+    run_auto_extract(uid)
+
+    return jsonify({"ok": True})

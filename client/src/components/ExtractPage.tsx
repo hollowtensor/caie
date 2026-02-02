@@ -10,6 +10,8 @@ import {
   extractData,
   extractCsvUrl,
   fetchPageMarkdown,
+  validateTable,
+  applyCorrection,
 } from '../api'
 import type { Upload, Schema, ExtractConfig, ExtractResult } from '../types'
 import { DataTable } from './DataTable'
@@ -107,6 +109,88 @@ function PageMarkdownView({
 }
 
 /* ------------------------------------------------------------------ */
+/*  Table diff utilities                                               */
+/* ------------------------------------------------------------------ */
+
+/** Extract all text content from an HTML table, normalized */
+function extractTextContent(html: string): string {
+  const parser = new DOMParser()
+  const doc = parser.parseFromString(html, 'text/html')
+  const cells = doc.querySelectorAll('td, th')
+  return Array.from(cells)
+    .map((c) => (c.textContent || '').trim().toLowerCase())
+    .filter(Boolean)
+    .join('|')
+}
+
+/** Check if two tables have the same content (ignoring structural differences) */
+function tablesAreSame(original: string, corrected: string): boolean {
+  return extractTextContent(original) === extractTextContent(corrected)
+}
+
+/* ------------------------------------------------------------------ */
+/*  VLM diff view                                                      */
+/* ------------------------------------------------------------------ */
+
+function VlmDiffView({
+  original,
+  corrected,
+  onAccept,
+  onReject,
+}: {
+  original: string
+  corrected: string
+  onAccept: () => void
+  onReject: () => void
+}) {
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2 text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
+        <svg className="h-4 w-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+        </svg>
+        <span className="font-medium">VLM re-OCR complete — review below</span>
+      </div>
+
+      <div>
+        <div className="text-[10px] font-semibold uppercase tracking-wider text-red-500 mb-1">Current (Original OCR)</div>
+        <div className="rounded border border-red-200 bg-red-50/30 p-2 overflow-auto">
+          <div className="vlm-table-preview" dangerouslySetInnerHTML={{ __html: original }} />
+        </div>
+      </div>
+
+      <div>
+        <div className="text-[10px] font-semibold uppercase tracking-wider text-green-600 mb-1">VLM Re-OCR</div>
+        <div className="rounded border border-green-200 bg-green-50/30 p-2 overflow-auto">
+          <div className="vlm-table-preview" dangerouslySetInnerHTML={{ __html: corrected }} />
+        </div>
+      </div>
+
+      <style>{`
+        .vlm-table-preview table { border-collapse: collapse; width: 100%; font-size: 10px; }
+        .vlm-table-preview th, .vlm-table-preview td { border: 1px solid #e5e7eb; padding: 3px 6px; text-align: left; white-space: nowrap; }
+        .vlm-table-preview th { background: #f9fafb; font-weight: 600; }
+      `}</style>
+
+      <div className="flex gap-2 pt-1">
+        <button
+          onClick={onAccept}
+          className="flex-1 rounded-lg bg-green-600 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-green-700"
+        >
+          Accept VLM Version
+        </button>
+        <button
+          onClick={onReject}
+          className="flex-1 rounded-lg border border-gray-200 px-3 py-2 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-50"
+        >
+          Keep Original
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------ */
 /*  Export view                                                        */
 /* ------------------------------------------------------------------ */
 
@@ -116,17 +200,27 @@ function ExportView({
   downloading,
   onDownload,
   onBack,
+  onRefresh,
+  extractConfig,
 }: {
   result: ExtractResult
   uploadId: string
   downloading: boolean
   onDownload: () => void
   onBack: () => void
+  onRefresh: (res: ExtractResult) => void
+  extractConfig: ExtractConfig
 }) {
   const [selectedRow, setSelectedRow] = useState<number | null>(null)
   const [zoom, setZoom] = useState(1)
   const [previewTab, setPreviewTab] = useState<'image' | 'parsed'>('parsed')
   const [pageMarkdown, setPageMarkdown] = useState<string>('')
+
+  // VLM validation state
+  const [vlmState, setVlmState] = useState<'idle' | 'loading' | 'preview' | 'no-change'>('idle')
+  const [vlmOriginal, setVlmOriginal] = useState('')
+  const [vlmCorrected, setVlmCorrected] = useState('')
+  const [vlmError, setVlmError] = useState('')
 
   // Find the "Page" column index to get page number from row data
   const pageColIdx = result.columns.findIndex(
@@ -150,10 +244,47 @@ function ExportView({
     fetchPageMarkdown(uploadId, previewPageNum).then((p) =>
       setPageMarkdown(p.markdown || ''),
     )
+    // Reset VLM state when changing rows
+    setVlmState('idle')
+    setVlmError('')
   }, [uploadId, previewPageNum])
 
   const handleRowClick = (originalIndex: number) => {
     setSelectedRow(originalIndex === selectedRow ? null : originalIndex)
+  }
+
+  const handleValidate = async () => {
+    if (!previewPageNum || selectedTableIdx === null) return
+    setVlmState('loading')
+    setVlmError('')
+    try {
+      const { original, corrected } = await validateTable(uploadId, previewPageNum, selectedTableIdx)
+      setVlmOriginal(original)
+      setVlmCorrected(corrected)
+      setVlmState(tablesAreSame(original, corrected) ? 'no-change' : 'preview')
+    } catch (e: unknown) {
+      setVlmError(e instanceof Error ? e.message : 'VLM validation failed')
+      setVlmState('idle')
+    }
+  }
+
+  const handleAccept = async () => {
+    if (!previewPageNum || selectedTableIdx === null) return
+    await applyCorrection(uploadId, previewPageNum, selectedTableIdx, vlmCorrected)
+    setVlmState('idle')
+    // Re-fetch markdown to show updated content
+    fetchPageMarkdown(uploadId, previewPageNum).then((p) =>
+      setPageMarkdown(p.markdown || ''),
+    )
+    // Re-run extraction to refresh results
+    const res = await extractData(uploadId, extractConfig)
+    onRefresh(res)
+  }
+
+  const handleReject = () => {
+    setVlmState('idle')
+    setVlmOriginal('')
+    setVlmCorrected('')
   }
 
   return (
@@ -291,11 +422,70 @@ function ExportView({
                       className="w-full rounded"
                     />
                   </div>
-                ) : (
-                  <PageMarkdownView
-                    markdown={pageMarkdown}
-                    highlightTableIdx={selectedTableIdx}
+                ) : vlmState === 'no-change' ? (
+                  <div>
+                    <PageMarkdownView
+                      markdown={pageMarkdown}
+                      highlightTableIdx={selectedTableIdx}
+                    />
+                    <div className="mt-3 border-t border-gray-100 pt-3">
+                      <div className="flex items-center gap-2 rounded-lg bg-green-50 border border-green-200 px-3 py-2">
+                        <svg className="h-4 w-4 text-green-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                        </svg>
+                        <span className="text-xs text-green-700 font-medium">VLM confirmed — no OCR errors detected in this table</span>
+                      </div>
+                      <button
+                        onClick={handleReject}
+                        className="mt-2 text-[10px] text-gray-400 hover:text-gray-600"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  </div>
+                ) : vlmState === 'preview' ? (
+                  <VlmDiffView
+                    original={vlmOriginal}
+                    corrected={vlmCorrected}
+                    onAccept={handleAccept}
+                    onReject={handleReject}
                   />
+                ) : (
+                  <div>
+                    <PageMarkdownView
+                      markdown={pageMarkdown}
+                      highlightTableIdx={selectedTableIdx}
+                    />
+                    {/* VLM validate button */}
+                    {selectedTableIdx !== null && (
+                      <div className="mt-3 border-t border-gray-100 pt-3">
+                        {vlmState === 'loading' ? (
+                          <div className="flex items-center gap-2 text-xs text-blue-600">
+                            <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                            </svg>
+                            Validating with VLM...
+                          </div>
+                        ) : (
+                          <>
+                            <button
+                              onClick={handleValidate}
+                              className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-blue-700"
+                            >
+                              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                              </svg>
+                              Validate with VLM
+                            </button>
+                            {vlmError && (
+                              <p className="mt-2 text-[11px] text-red-500">{vlmError}</p>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
             </div>
@@ -424,6 +614,11 @@ export function ExtractPage() {
           downloading={downloading}
           onDownload={handleDownload}
           onBack={() => setResult(null)}
+          onRefresh={setResult}
+          extractConfig={{
+            ...config,
+            extras: extrasText.split(',').map((s) => s.trim()).filter(Boolean),
+          }}
         />
       ) : (
         <div className="space-y-5">

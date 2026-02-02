@@ -105,3 +105,37 @@ export async function fetchTableRegions(uploadId: string, pageNum: number): Prom
   const res = await fetch(`/api/uploads/${uploadId}/page/${pageNum}/table-regions`)
   return res.json()
 }
+
+export async function validateTable(
+  uploadId: string,
+  pageNum: number,
+  tableIndex: number,
+): Promise<{ original: string; corrected: string }> {
+  const res = await fetch(`/api/uploads/${uploadId}/page/${pageNum}/validate-table`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ table_index: tableIndex }),
+  })
+  if (!res.ok) {
+    const err = await res.json()
+    throw new Error(err.error || 'VLM validation failed')
+  }
+  return res.json()
+}
+
+export async function applyCorrection(
+  uploadId: string,
+  pageNum: number,
+  tableIndex: number,
+  correctedTable: string,
+): Promise<void> {
+  const res = await fetch(`/api/uploads/${uploadId}/page/${pageNum}/apply-correction`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ table_index: tableIndex, corrected_table: correctedTable }),
+  })
+  if (!res.ok) {
+    const err = await res.json()
+    throw new Error(err.error || 'Apply correction failed')
+  }
+}
