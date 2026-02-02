@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pricelist OCR</title>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f0f2f5; color: #1a1a2e;
+      height: 100vh; display: flex; flex-direction: column;
+    }
+
+    header {
+      background: #fff; border-bottom: 1px solid #e0e0e0;
+      padding: 10px 24px; display: flex; align-items: center; gap: 16px;
+    }
+    header h1 { font-size: 16px; font-weight: 700; }
+    header .sub { font-size: 12px; color: #999; }
+
+    .layout { display: flex; flex: 1; overflow: hidden; }
+
+    /* ── Left ── */
+    .left {
+      width: 340px; min-width: 340px; border-right: 1px solid #e0e0e0;
+      background: #fff; display: flex; flex-direction: column; overflow: hidden;
+    }
+    .section { padding: 14px 16px; border-bottom: 1px solid #f0f0f0; }
+    .section-title {
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.5px; color: #999; margin-bottom: 10px;
+    }
+
+    .form-row { display: flex; gap: 8px; margin-bottom: 8px; }
+    .form-row > * { flex: 1; }
+    label { display: block; font-size: 11px; font-weight: 600; color: #666; margin-bottom: 3px; }
+    select, input[type="text"], input[type="number"] {
+      width: 100%; padding: 6px 8px; border: 1px solid #d0d5dd;
+      border-radius: 5px; font-size: 13px; background: #fff;
+    }
+    .drop-zone {
+      border: 2px dashed #d0d5dd; border-radius: 6px; padding: 14px;
+      text-align: center; cursor: pointer; font-size: 13px; color: #999;
+      margin-bottom: 8px; position: relative; transition: border-color 0.2s;
+    }
+    .drop-zone:hover { border-color: #3b82f6; }
+    .drop-zone input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+    .drop-zone .fname { font-weight: 600; color: #1a1a2e; }
+    .btn {
+      padding: 8px 16px; border: none; border-radius: 5px;
+      font-size: 13px; font-weight: 600; cursor: pointer; width: 100%;
+    }
+    .btn-primary { background: #3b82f6; color: #fff; }
+    .btn-primary:hover { background: #2563eb; }
+    .btn-primary:disabled { background: #93c5fd; cursor: not-allowed; }
+    .settings-toggle {
+      font-size: 11px; color: #3b82f6; cursor: pointer;
+      display: inline-block; margin-top: 6px;
+    }
+    .settings-box { display: none; margin-top: 8px; }
+    .settings-box.open { display: block; }
+
+    /* Upload list */
+    .uploads-section { flex-shrink: 0; max-height: 200px; overflow-y: auto; }
+    .upload-list { list-style: none; }
+    .upload-item {
+      padding: 8px 10px; border-radius: 5px; cursor: pointer;
+      margin-bottom: 2px; display: flex; justify-content: space-between;
+      align-items: center; font-size: 12px; transition: background 0.1s;
+    }
+    .upload-item:hover { background: #f5f7fa; }
+    .upload-item.active { background: #eff6ff; }
+    .upload-item .name {
+      font-weight: 500; overflow: hidden; text-overflow: ellipsis;
+      white-space: nowrap; max-width: 190px;
+    }
+    .upload-item .meta { font-size: 10px; color: #aaa; margin-top: 1px; }
+    .upload-item .right-side { display: flex; align-items: center; gap: 6px; }
+    .del-btn {
+      display: none; border: none; background: none; cursor: pointer;
+      color: #ccc; font-size: 14px; padding: 2px 4px; border-radius: 3px; line-height: 1;
+    }
+    .del-btn:hover { color: #ef4444; background: #fef2f2; }
+    .upload-item:hover .del-btn { display: block; }
+    .badge {
+      font-size: 9px; padding: 2px 7px; border-radius: 10px;
+      font-weight: 700; text-transform: uppercase; white-space: nowrap;
+    }
+    .badge-done { background: #dcfce7; color: #166534; }
+    .badge-error { background: #fef2f2; color: #991b1b; }
+    .badge-running { background: #dbeafe; color: #1e40af; }
+    .badge-pending { background: #f3f4f6; color: #6b7280; }
+
+    /* Pages */
+    .pages-section { flex: 1; overflow-y: auto; }
+    .pages-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: 5px;
+    }
+    .page-thumb {
+      aspect-ratio: 0.707; border-radius: 3px; border: 2px solid #e0e0e0;
+      overflow: hidden; cursor: pointer; position: relative; transition: border-color 0.15s;
+    }
+    .page-thumb:hover { border-color: #93c5fd; }
+    .page-thumb.selected { border-color: #3b82f6; }
+    .page-thumb.ocr-done { border-color: #86efac; }
+    .page-thumb.ocr-error { border-color: #fca5a5; }
+    .page-thumb.ocr-active { border-color: #60a5fa; animation: pulse 1s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.6} }
+    .page-thumb img { width: 100%; height: 100%; object-fit: cover; }
+    .page-thumb .num {
+      position: absolute; bottom: 1px; right: 3px; font-size: 9px;
+      color: #fff; background: rgba(0,0,0,0.5); padding: 1px 4px; border-radius: 2px;
+    }
+
+    /* ── Right ── */
+    .right { flex: 1; overflow-y: auto; padding: 20px 24px; display: flex; flex-direction: column; }
+    .card {
+      background: #fff; border-radius: 8px; padding: 18px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06); margin-bottom: 14px;
+    }
+    .empty-state {
+      display: flex; align-items: center; justify-content: center;
+      flex: 1; color: #bbb; font-size: 14px;
+    }
+
+    /* Progress */
+    .pbar-bg {
+      background: #e5e7eb; border-radius: 6px; height: 7px;
+      margin: 10px 0; overflow: hidden;
+    }
+    .pbar-fill {
+      height: 100%; background: #3b82f6; transition: width 0.3s; border-radius: 6px;
+    }
+    .pstats { display: flex; gap: 18px; font-size: 11px; color: #888; }
+    .pstats strong { color: #333; }
+
+    /* Markdown viewer */
+    .md-viewer { flex: 1; display: flex; flex-direction: column; }
+    .md-header {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 12px;
+    }
+    .md-header h3 { font-size: 14px; margin: 0; }
+    .md-tabs { display: flex; gap: 4px; }
+    .md-tab {
+      padding: 4px 12px; font-size: 11px; border: 1px solid #d0d5dd;
+      border-radius: 4px; background: #fff; cursor: pointer; font-weight: 500;
+    }
+    .md-tab:hover { background: #f5f5f5; }
+    .md-tab.active { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+    .md-content {
+      flex: 1; overflow-y: auto; padding: 16px;
+      border: 1px solid #e5e7eb; border-radius: 6px; background: #fff;
+      font-size: 13px; line-height: 1.6;
+    }
+    .md-content pre {
+      background: #f6f8fa; padding: 12px; border-radius: 4px;
+      overflow-x: auto; font-size: 12px;
+    }
+    .md-content table {
+      width: 100%; border-collapse: collapse; font-size: 12px; margin: 8px 0;
+    }
+    .md-content th, .md-content td {
+      padding: 6px 10px; border: 1px solid #e5e7eb; text-align: left;
+    }
+    .md-content th { background: #f9fafb; font-weight: 600; }
+    .md-content img { max-width: 100%; }
+    .md-content.raw { font-family: monospace; white-space: pre-wrap; font-size: 12px; }
+    .md-pending {
+      display: flex; align-items: center; justify-content: center;
+      flex: 1; color: #bbb; font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Pricelist OCR</h1>
+    <span class="sub">Upload PDF, OCR pages, view markdown</span>
+  </header>
+
+  <div class="layout">
+    <aside class="left">
+      <!-- Upload form -->
+      <div class="section">
+        <div class="section-title">New Upload</div>
+        <div class="form-row">
+          <div>
+            <label>Company</label>
+            <select id="company">
+              <option value="schneider">Schneider</option>
+              <option value="legrand">Legrand</option>
+              <option value="siemens">Siemens</option>
+            </select>
+          </div>
+          <div>
+            <label>Year</label>
+            <input type="number" id="year" value="2025" min="2020" max="2030">
+          </div>
+          <div>
+            <label>Month</label>
+            <select id="month">
+              <option value="1">Jan</option><option value="2">Feb</option>
+              <option value="3">Mar</option><option value="4">Apr</option>
+              <option value="5">May</option><option value="6">Jun</option>
+              <option value="7" selected>Jul</option><option value="8">Aug</option>
+              <option value="9">Sep</option><option value="10">Oct</option>
+              <option value="11">Nov</option><option value="12">Dec</option>
+            </select>
+          </div>
+        </div>
+        <div class="drop-zone">
+          <input type="file" id="pdfFile" accept=".pdf">
+          <span id="fileLabel">Drop PDF or click to browse</span>
+        </div>
+        <button class="btn btn-primary" id="uploadBtn" onclick="doUpload()">Upload &amp; OCR</button>
+        <span class="settings-toggle" onclick="this.nextElementSibling.classList.toggle('open')">Settings &#9662;</span>
+        <div class="settings-box">
+          <label>OCR Server URL</label>
+          <input type="text" id="serverUrl" value="{{ server_url }}">
+        </div>
+      </div>
+
+      <!-- Uploads list -->
+      <div class="section uploads-section">
+        <div class="section-title">Uploads</div>
+        <ul class="upload-list" id="uploadList"></ul>
+      </div>
+
+      <!-- Page thumbnails -->
+      <div class="section pages-section" id="pagesSection" style="display:none;">
+        <div class="section-title">Pages <span id="pagesCount"></span></div>
+        <div class="pages-grid" id="pagesGrid"></div>
+      </div>
+    </aside>
+
+    <main class="right" id="rightPanel">
+      <div class="empty-state" id="emptyState">Select or upload a PDF to begin</div>
+
+      <!-- Progress -->
+      <div class="card" id="progressCard" style="display:none;">
+        <strong id="progressTitle" style="font-size:14px;">Processing...</strong>
+        <div class="pbar-bg"><div class="pbar-fill" id="pbar"></div></div>
+        <div id="progressMsg" style="font-size:12px;color:#888;margin-bottom:6px;"></div>
+        <div class="pstats">
+          <span>Page <strong id="statPage">0/0</strong></span>
+          <span>State <strong id="statState">-</strong></span>
+        </div>
+      </div>
+
+      <!-- Markdown viewer -->
+      <div class="card md-viewer" id="mdCard" style="display:none;">
+        <div class="md-header">
+          <h3 id="mdTitle">Page 1</h3>
+          <div class="md-tabs">
+            <button class="md-tab active" data-mode="rendered" onclick="setMdMode('rendered',this)">Rendered</button>
+            <button class="md-tab" data-mode="raw" onclick="setMdMode('raw',this)">Raw</button>
+          </div>
+        </div>
+        <div class="md-content" id="mdContent"></div>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    let activeId = null;
+    let activePage = null;
+    let evtSrc = null;
+    let pageStates = {};
+    let mdMode = 'rendered';
+    let currentRawMd = '';
+
+    loadUploads();
+
+    document.getElementById('pdfFile').addEventListener('change', function () {
+      document.getElementById('fileLabel').innerHTML = this.files.length
+        ? '<span class="fname">' + this.files[0].name + '</span>'
+        : 'Drop PDF or click to browse';
+    });
+
+    // ── Uploads list ──
+    async function loadUploads() {
+      const list = await (await fetch('/api/uploads')).json();
+      const ul = document.getElementById('uploadList');
+      ul.innerHTML = '';
+      const months = ['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      list.forEach(u => {
+        const li = document.createElement('li');
+        li.className = 'upload-item' + (u.id === activeId ? ' active' : '');
+        li.setAttribute('data-id', u.id);
+        li.onclick = () => selectUpload(u.id);
+        const bc = u.state === 'done' ? 'badge-done'
+          : u.state === 'error' ? 'badge-error'
+          : ['ocr','rendering','queued'].includes(u.state) ? 'badge-running'
+          : 'badge-pending';
+        li.innerHTML =
+          '<div><div class="name">' + u.filename + '</div>' +
+          '<div class="meta">' + u.company + ' &middot; ' + (months[u.month]||'?') + ' ' + (u.year||'?') + '</div></div>' +
+          '<div class="right-side">' +
+            '<span class="badge ' + bc + '">' + u.state + '</span>' +
+            '<button class="del-btn" onclick="event.stopPropagation();deleteUpload(\'' + u.id + '\')" title="Delete">&times;</button>' +
+          '</div>';
+        ul.appendChild(li);
+      });
+    }
+
+    // ── Delete ──
+    async function deleteUpload(id) {
+      if (!confirm('Delete this upload and all its pages?')) return;
+      try {
+        await fetch('/api/uploads/' + id, { method: 'DELETE' });
+        if (activeId === id) {
+          activeId = null; activePage = null;
+          if (evtSrc) { evtSrc.close(); evtSrc = null; }
+          document.getElementById('emptyState').style.display = 'flex';
+          document.getElementById('progressCard').style.display = 'none';
+          document.getElementById('mdCard').style.display = 'none';
+          document.getElementById('pagesSection').style.display = 'none';
+        }
+        loadUploads();
+      } catch (e) { alert('Delete failed: ' + e.message); }
+    }
+
+    // ── Upload ──
+    async function doUpload() {
+      const file = document.getElementById('pdfFile').files[0];
+      if (!file) { alert('Select a PDF'); return; }
+      const btn = document.getElementById('uploadBtn');
+      btn.disabled = true; btn.textContent = 'Uploading...';
+      const fd = new FormData();
+      fd.append('pdf', file);
+      fd.append('company', document.getElementById('company').value);
+      fd.append('year', document.getElementById('year').value);
+      fd.append('month', document.getElementById('month').value);
+      fd.append('server_url', document.getElementById('serverUrl').value);
+      try {
+        const data = await (await fetch('/upload', { method: 'POST', body: fd })).json();
+        if (data.error) { alert(data.error); return; }
+        await loadUploads();
+        selectUpload(data.id);
+      } catch (e) { alert('Upload failed: ' + e.message); }
+      finally { btn.disabled = false; btn.textContent = 'Upload & OCR'; }
+    }
+
+    // ── Select upload ──
+    async function selectUpload(id) {
+      activeId = id; activePage = null;
+      if (evtSrc) { evtSrc.close(); evtSrc = null; }
+
+      document.querySelectorAll('.upload-item').forEach(el =>
+        el.classList.toggle('active', el.getAttribute('data-id') === id));
+
+      document.getElementById('emptyState').style.display = 'none';
+      document.getElementById('progressCard').style.display = 'block';
+      document.getElementById('mdCard').style.display = 'none';
+      document.getElementById('pbar').style.background = '#3b82f6';
+
+      loadPages(id);
+
+      try {
+        const u = await (await fetch('/api/uploads/' + id)).json();
+        if (u.state === 'done') {
+          showDone(u); refreshPageStates(id);
+        } else if (u.state === 'error') {
+          showError(u); refreshPageStates(id);
+        } else {
+          showProgress(u); listenStatus(id);
+        }
+      } catch (e) { listenStatus(id); }
+    }
+
+    function showProgress(u) {
+      const pct = u.total_pages > 0 ? Math.round(u.current_page / u.total_pages * 100) : 0;
+      document.getElementById('pbar').style.width = pct + '%';
+      document.getElementById('progressMsg').textContent = u.message || '';
+      document.getElementById('statPage').textContent = u.current_page + '/' + u.total_pages;
+      document.getElementById('statState').textContent = u.state;
+      document.getElementById('progressTitle').textContent =
+        u.state === 'rendering' ? 'Rendering pages...' : 'Running OCR...';
+    }
+
+    function showDone(u) {
+      document.getElementById('progressTitle').textContent = 'Complete';
+      document.getElementById('pbar').style.width = '100%';
+      document.getElementById('pbar').style.background = '#22c55e';
+      document.getElementById('progressMsg').textContent = u.message || '';
+      document.getElementById('statPage').textContent = u.current_page + '/' + u.total_pages;
+      document.getElementById('statState').textContent = 'done';
+    }
+
+    function showError(u) {
+      document.getElementById('progressTitle').textContent = 'Error';
+      document.getElementById('pbar').style.width = '100%';
+      document.getElementById('pbar').style.background = '#ef4444';
+      document.getElementById('progressMsg').textContent = u.message || '';
+      document.getElementById('statState').textContent = 'error';
+    }
+
+    // ── SSE ──
+    function listenStatus(id) {
+      evtSrc = new EventSource('/api/uploads/' + id + '/status');
+      evtSrc.onmessage = function (e) {
+        const s = JSON.parse(e.data);
+        if (s.error || activeId !== id) { evtSrc.close(); return; }
+        showProgress(s);
+        if (s.state === 'ocr') { loadPages(id); refreshPageStates(id); }
+        if (s.state === 'done') {
+          evtSrc.close(); showDone(s); loadUploads(); refreshPageStates(id);
+        } else if (s.state === 'error') {
+          evtSrc.close(); showError(s); loadUploads(); refreshPageStates(id);
+        }
+      };
+      evtSrc.onerror = () => evtSrc.close();
+    }
+
+    // ── Pages ──
+    let pagesTimer = null;
+    async function loadPages(id) {
+      if (pagesTimer) clearTimeout(pagesTimer);
+      const files = await (await fetch('/api/uploads/' + id + '/pages')).json();
+      const sec = document.getElementById('pagesSection');
+      const grid = document.getElementById('pagesGrid');
+      if (!files.length) {
+        sec.style.display = 'none';
+        if (activeId === id) pagesTimer = setTimeout(() => loadPages(id), 1500);
+        return;
+      }
+      sec.style.display = 'block';
+      document.getElementById('pagesCount').textContent = '(' + files.length + ')';
+      grid.innerHTML = '';
+      files.forEach((f, i) => {
+        const num = i + 1;
+        const d = document.createElement('div');
+        d.className = 'page-thumb';
+        d.setAttribute('data-page', num);
+        const ps = pageStates[num];
+        if (ps === 'done') d.classList.add('ocr-done');
+        else if (ps === 'error') d.classList.add('ocr-error');
+        if (activePage === num) d.classList.add('selected');
+        d.onclick = () => viewPage(id, num);
+        d.innerHTML = '<img src="/pages/' + id + '/' + f + '" loading="lazy">' +
+                      '<span class="num">' + num + '</span>';
+        grid.appendChild(d);
+      });
+    }
+
+    async function refreshPageStates(id) {
+      const states = await (await fetch('/api/uploads/' + id + '/page-states')).json();
+      pageStates = {};
+      states.forEach(s => { pageStates[s.page_num] = s.state; });
+      // Update thumb classes
+      document.querySelectorAll('.page-thumb').forEach(el => {
+        const pn = parseInt(el.getAttribute('data-page'));
+        el.classList.remove('ocr-done', 'ocr-error', 'ocr-active');
+        if (pageStates[pn] === 'done') el.classList.add('ocr-done');
+        else if (pageStates[pn] === 'error') el.classList.add('ocr-error');
+      });
+    }
+
+    // ── View page markdown ──
+    async function viewPage(uid, pageNum) {
+      activePage = pageNum;
+      document.querySelectorAll('.page-thumb').forEach(el =>
+        el.classList.toggle('selected', parseInt(el.getAttribute('data-page')) === pageNum));
+
+      const card = document.getElementById('mdCard');
+      const content = document.getElementById('mdContent');
+      card.style.display = 'flex';
+      document.getElementById('mdTitle').textContent = 'Page ' + pageNum;
+      content.innerHTML = '<div class="md-pending">Loading...</div>';
+      content.classList.remove('raw');
+
+      try {
+        const p = await (await fetch('/api/uploads/' + uid + '/page/' + pageNum)).json();
+        if (p.state === 'pending') {
+          content.innerHTML = '<div class="md-pending">Waiting for OCR...</div>';
+          currentRawMd = '';
+        } else if (p.state === 'error') {
+          content.innerHTML = '<div class="md-pending" style="color:#ef4444">OCR error: ' + (p.error||'unknown') + '</div>';
+          currentRawMd = '';
+        } else {
+          currentRawMd = p.markdown || '';
+          renderMd();
+        }
+      } catch (e) {
+        content.innerHTML = '<div class="md-pending">Failed to load</div>';
+      }
+    }
+
+    function renderMd() {
+      const el = document.getElementById('mdContent');
+      if (mdMode === 'raw') {
+        el.classList.add('raw');
+        el.textContent = currentRawMd;
+      } else {
+        el.classList.remove('raw');
+        el.innerHTML = marked.parse(currentRawMd);
+      }
+    }
+
+    function setMdMode(mode, btn) {
+      mdMode = mode;
+      document.querySelectorAll('.md-tab').forEach(t => t.classList.remove('active'));
+      btn.classList.add('active');
+      if (currentRawMd) renderMd();
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,89 @@
+{
+  "classify.predict": {
+    "traces": [],
+    "train": [],
+    "demos": [
+      {
+        "augmented": true,
+        "context": "# Easy TeSys",
+        "headers": "Frame | AC-1 Rating | Power Poles | Reference | B7 (24V) | F7 (110V) | M5WB (220V) | N5WB (415V)",
+        "sample_rows": "Row 1: Frame: FRAME-1 | AC-1 Rating: 20 | Power Poles: 2NO + 2NC | Reference: LC1E06008*IN | B7 (24V): - | F7 (110V): - | M5WB (220V): 2290 | N5WB (415V): -\nRow 2: Frame: FRAME-1 | AC-1 Rating: 25 | Power Poles: 2NO + 2NC | Reference: LC1E09008*IN | B7 (24V): 2465 | F7 (110V): 2465 | M5WB (220V): 2465 | N5WB (415V): 2465",
+        "reasoning": "The table describes compatibility and specifications for Easy TeSys contactors, with columns indicating frame type, electrical ratings, pole configuration, and reference codes for various voltage ranges (e.g., B7, F7, M5WB, N5WB). The \"Reference\" column contains product model identifiers, and the voltage-specific columns (B7, F7, etc.) appear to indicate product availability or pricing per voltage range. Since these are accessories or compatibility details tied to specific voltage types (e.g., 24V, 110V), and the structure matches product availability per voltage class, the columns are classified accordingly. \"Frame\" and \"AC-1 Rating\" relate to product specifications, \"Power Poles\" to physical configuration, \"Reference\" to product identification, and the voltage-based columns (B7, F7, etc.) to price or availability per voltage type. Therefore, these are mapped to appropriate roles: reference, spec, and price where applicable.",
+        "category": "Easy TeSys",
+        "subcategory": "4 Pole Accessories Compatibility",
+        "column_roles": "{\"Frame\": \"spec\", \"AC-1 Rating\": \"spec\", \"Power Poles\": \"spec\", \"Reference\": \"reference\", \"B7 (24V)\": \"price\", \"F7 (110V)\": \"price\", \"M5WB (220V)\": \"price\", \"N5WB (415V)\": \"price\"}"
+      },
+      {
+        "augmented": true,
+        "context": "## Control Relays - CAE, Conformance to IEC60947-5-1, CE Marking",
+        "headers": "NO | NC | Reference | B5 | F5 | M5 | N5",
+        "sample_rows": "Row 1: NO: 4 | NC: 0 | Reference: CAE40* | B5: 1845 | F5: 1545 | M5: 1545 | N5: 1545\nRow 2: NO: 3 | NC: 1 | Reference: CAE31* | B5: 1845 | F5: 1845 | M5: 1545 | N5: 1845",
+        "reasoning": "The table describes control relays with specifications related to number of contacts (NO, NC), reference codes, and model identifiers (B5, F5, M5, N5), all under the context of conformance to IEC60947-5-1 and CE marking. The headers indicate contact types and model-specific reference numbers, where \"Reference\" likely points to the product model, and the other columns (B5, F5, etc.) appear to be part of a product line or series (likely internal part numbers). The \"NO\" and \"NC\" columns indicate contact configurations, while the reference and model codes (B5, F5, etc.) likely represent different relay types or configurations. Based on the context and naming (CAE, IEC60947-5-1, CE), this falls under control relays. The \"Reference\" column is clearly a product identifier, while the B5, F5, M5, N5 columns are likely part of a series or product code, possibly indicating different relay types or features. The NO/NC columns indicate contact configuration, which is a key specification for relays. Hence, the reference column is primary, and the others are part of a structured product code system. The \"Reference\" column should be assigned as the primary reference, while the B5, F5, etc., are likely internal or product-specific codes, so they are treated as product specifications or identifiers. Since these are control relays, and the context mentions IEC and CE marking, the category and subcategory align with control relays.",
+        "category": "TeSys",
+        "subcategory": "Control Relays",
+        "column_roles": "{\"NO\": \"spec\", \"NC\": \"spec\", \"Reference\": \"reference\", \"B5\": \"spec\", \"F5\": \"spec\", \"M5\": \"spec\", \"N5\": \"spec\"}"
+      },
+      {
+        "augmented": true,
+        "context": "## Spare Coil for Contactors",
+        "headers": "Contactors | Reference",
+        "sample_rows": "Row 1: Contactors: 4 Pole Contactors | Reference: \nRow 2: Contactors: LC1E0600*.... LC1E1800* | Reference: LAEX1T**",
+        "reasoning": "The context indicates a table listing spare coils for contactors, with columns for contactor types and their corresponding reference codes. The \"Contactors\" column lists the type of contactors (e.g., 4 Pole, specific models), and the \"Reference\" column provides the spare coil reference code (e.g., LAEX1T**). The \"Reference\" column is clearly indicating a product reference or part number, which aligns with a product specification or part number lookup. The \"Contactors\" column serves as a reference to the product line, while \"Reference\" acts as the specific part or spare coil identifier. No pricing or frame details are present, so these columns are assigned accordingly.",
+        "category": "Easy TeSys",
+        "subcategory": "Spare Coils",
+        "column_roles": "{\"Contactors\": \"reference\", \"Reference\": \"spec\"}"
+      },
+      {
+        "augmented": true,
+        "context": "## Accessories - For Easy TeSys Contactors",
+        "headers": "Description | For Use with | Mounting | Contacts | Reference | Unit MRP [₹]",
+        "sample_rows": "Row 1: Description: Auxiliary contact block | For Use with: LC1E06..E630 & LC1E0600..E9500 | Mounting: FRONT | Contacts: 1NO+1NC | Reference: LAEN11 ✓ | Unit MRP [₹]: 480\nRow 2: Description: Auxiliary contact block | For Use with: LC1E06..E630 & LC1E0600..E9500 | Mounting: FRONT | Contacts: 2NO | Reference: LAEN20 ✓ | Unit MRP [₹]: 480",
+        "reasoning": "The context indicates a product list for accessories specifically designed for Easy TeSys contactors. The headers include descriptive details such as product description, compatibility (For Use with), mounting method, contact specifications, reference code, and price (Unit MRP [₹]). The \"Reference\" column likely maps to a product code (e.g., LAEN11, LAEN20), which is consistent with product identifiers used in the Easy TeSys product line. The \"For Use with\" column identifies compatible contactors, and \"Unit MRP [₹]\" indicates pricing. Based on the naming and structure, the product category is Easy TeSys, and the subcategory is accessories. The \"Description\" serves as a product name or feature, \"For Use with\" indicates compatibility (reference), \"Mounting\" and \"Contacts\" describe physical and functional specs, while \"Reference\" and \"Unit MRP [₹]\" are used for identification and pricing. Hence, \"Description\" is assigned to description, \"For Use with\" to reference, \"Mounting\" and \"Contacts\" to spec, \"Reference\" to reference, and \"Unit MRP [₹]\" to price.",
+        "category": "Easy TeSys",
+        "subcategory": "Accessories",
+        "column_roles": "{\"Description\": \"description\", \"For Use with\": \"reference\", \"Mounting\": \"spec\", \"Contacts\": \"spec\", \"Reference\": \"reference\", \"Unit MRP [₹]\": \"price\"}"
+      }
+    ],
+    "signature": {
+      "instructions": "Classify columns of a product pricelist table and identify the product category/subcategory.",
+      "fields": [
+        {
+          "prefix": "Context:",
+          "description": "Section heading / text before the table"
+        },
+        {
+          "prefix": "Headers:",
+          "description": "Pipe-separated column headers"
+        },
+        {
+          "prefix": "Sample Rows:",
+          "description": "First 2 data rows formatted as 'header: value' pairs"
+        },
+        {
+          "prefix": "Reasoning: Let's think step by step in order to",
+          "description": "${reasoning}"
+        },
+        {
+          "prefix": "Category:",
+          "description": "Product family/section name"
+        },
+        {
+          "prefix": "Subcategory:",
+          "description": "Specific product group"
+        },
+        {
+          "prefix": "Column Roles:",
+          "description": "JSON object mapping each header to a role: reference, price, spec, frame, description, or skip"
+        }
+      ]
+    },
+    "lm": null
+  },
+  "metadata": {
+    "dependency_versions": {
+      "python": "3.12",
+      "dspy": "3.1.2",
+      "cloudpickle": "3.1"
+    }
+  }
+}
