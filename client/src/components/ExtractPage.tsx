@@ -1,15 +1,110 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useSearchParams, Link } from 'react-router-dom'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import rehypeRaw from 'rehype-raw'
 import {
   fetchUpload,
   fetchSchemas,
   deleteSchema,
   extractData,
   extractCsvUrl,
-  fetchTableRegions,
+  fetchPageMarkdown,
 } from '../api'
-import type { Upload, Schema, ExtractConfig, ExtractResult, TableRegion } from '../types'
+import type { Upload, Schema, ExtractConfig, ExtractResult } from '../types'
 import { DataTable } from './DataTable'
+
+/* ------------------------------------------------------------------ */
+/*  Markdown view with table highlighting                              */
+/* ------------------------------------------------------------------ */
+
+function PageMarkdownView({
+  markdown,
+  highlightTableIdx,
+}: {
+  markdown: string
+  highlightTableIdx: number | null
+}) {
+  // Split markdown by <table>...</table> blocks, wrap the target one
+  const highlighted = useMemo(() => {
+    if (highlightTableIdx === null || !markdown) return markdown
+
+    let tableCount = 0
+    return markdown.replace(
+      /<table[\s\S]*?<\/table>/gi,
+      (match) => {
+        const idx = tableCount++
+        if (idx === highlightTableIdx) {
+          return `<div class="highlighted-table"><div class="table-label">Source Table</div>${match}</div>`
+        }
+        return match
+      },
+    )
+  }, [markdown, highlightTableIdx])
+
+  return (
+    <div className="page-markdown-preview prose prose-sm max-w-none text-[11px]">
+      <style>{`
+        .page-markdown-preview table {
+          border-collapse: collapse;
+          width: 100%;
+          font-size: 10px;
+          margin: 8px 0;
+        }
+        .page-markdown-preview th,
+        .page-markdown-preview td {
+          border: 1px solid #e5e7eb;
+          padding: 3px 6px;
+          text-align: left;
+          white-space: nowrap;
+        }
+        .page-markdown-preview th {
+          background: #f9fafb;
+          font-weight: 600;
+          color: #374151;
+        }
+        .page-markdown-preview td {
+          color: #4b5563;
+        }
+        .page-markdown-preview .highlighted-table {
+          position: relative;
+          background: #dbeafe;
+          border: 2px solid #3b82f6;
+          border-radius: 6px;
+          padding: 4px;
+          margin: 8px 0;
+        }
+        .page-markdown-preview .highlighted-table table {
+          margin: 0;
+        }
+        .page-markdown-preview .table-label {
+          font-size: 9px;
+          font-weight: 700;
+          color: #2563eb;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+          padding: 2px 6px 4px;
+        }
+        .page-markdown-preview h1,
+        .page-markdown-preview h2,
+        .page-markdown-preview h3,
+        .page-markdown-preview h4 {
+          font-size: 11px;
+          font-weight: 700;
+          color: #1f2937;
+          margin: 10px 0 4px;
+        }
+        .page-markdown-preview p {
+          margin: 4px 0;
+          color: #6b7280;
+        }
+      `}</style>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
+        {highlighted}
+      </ReactMarkdown>
+    </div>
+  )
+}
 
 /* ------------------------------------------------------------------ */
 /*  Export view                                                        */
@@ -30,7 +125,8 @@ function ExportView({
 }) {
   const [selectedRow, setSelectedRow] = useState<number | null>(null)
   const [zoom, setZoom] = useState(1)
-  const [regions, setRegions] = useState<TableRegion[]>([])
+  const [previewTab, setPreviewTab] = useState<'image' | 'parsed'>('parsed')
+  const [pageMarkdown, setPageMarkdown] = useState<string>('')
 
   // Find the "Page" column index to get page number from row data
   const pageColIdx = result.columns.findIndex(
@@ -45,13 +141,15 @@ function ExportView({
   const selectedTableIdx =
     selectedRow !== null ? result.row_table_indices?.[selectedRow] ?? null : null
 
-  // Fetch table regions when page changes
+  // Fetch page markdown when page changes
   useEffect(() => {
     if (!previewPageNum || previewPageNum <= 0) {
-      setRegions([])
+      setPageMarkdown('')
       return
     }
-    fetchTableRegions(uploadId, previewPageNum).then(setRegions)
+    fetchPageMarkdown(uploadId, previewPageNum).then((p) =>
+      setPageMarkdown(p.markdown || ''),
+    )
   }, [uploadId, previewPageNum])
 
   const handleRowClick = (originalIndex: number) => {
@@ -119,32 +217,59 @@ function ExportView({
 
         {/* Page preview panel */}
         {previewPageNum && previewPageNum > 0 && (
-          <div className="w-[380px] flex-shrink-0">
+          <div className="w-[420px] flex-shrink-0">
             <div className="sticky top-8 rounded-xl border border-gray-200 bg-white shadow-sm">
+              {/* Header with tabs and controls */}
               <div className="flex items-center justify-between border-b border-gray-100 px-4 py-2">
-                <span className="text-xs font-semibold text-gray-600">
-                  Page {previewPageNum}
-                </span>
                 <div className="flex items-center gap-1">
+                  <span className="text-xs font-semibold text-gray-600 mr-2">
+                    Page {previewPageNum}
+                  </span>
                   <button
-                    onClick={() => setZoom((z) => Math.max(0.5, z - 0.25))}
-                    className="rounded px-1.5 py-0.5 text-[11px] font-medium text-gray-500 hover:bg-gray-100 transition-colors"
+                    onClick={() => setPreviewTab('parsed')}
+                    className={`rounded px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                      previewTab === 'parsed'
+                        ? 'bg-gray-800 text-white'
+                        : 'text-gray-500 hover:bg-gray-100'
+                    }`}
                   >
-                    -
+                    Parsed
                   </button>
                   <button
-                    onClick={() => setZoom(1)}
-                    className="rounded px-1.5 py-0.5 text-[10px] font-medium text-gray-400 hover:bg-gray-100 tabular-nums transition-colors"
+                    onClick={() => setPreviewTab('image')}
+                    className={`rounded px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                      previewTab === 'image'
+                        ? 'bg-gray-800 text-white'
+                        : 'text-gray-500 hover:bg-gray-100'
+                    }`}
                   >
-                    {Math.round(zoom * 100)}%
+                    Image
                   </button>
-                  <button
-                    onClick={() => setZoom((z) => Math.min(3, z + 0.25))}
-                    className="rounded px-1.5 py-0.5 text-[11px] font-medium text-gray-500 hover:bg-gray-100 transition-colors"
-                  >
-                    +
-                  </button>
-                  <div className="mx-1 h-4 w-px bg-gray-200" />
+                </div>
+                <div className="flex items-center gap-1">
+                  {previewTab === 'image' && (
+                    <>
+                      <button
+                        onClick={() => setZoom((z) => Math.max(0.5, z - 0.25))}
+                        className="rounded px-1.5 py-0.5 text-[11px] font-medium text-gray-500 hover:bg-gray-100 transition-colors"
+                      >
+                        -
+                      </button>
+                      <button
+                        onClick={() => setZoom(1)}
+                        className="rounded px-1.5 py-0.5 text-[10px] font-medium text-gray-400 hover:bg-gray-100 tabular-nums transition-colors"
+                      >
+                        {Math.round(zoom * 100)}%
+                      </button>
+                      <button
+                        onClick={() => setZoom((z) => Math.min(3, z + 0.25))}
+                        className="rounded px-1.5 py-0.5 text-[11px] font-medium text-gray-500 hover:bg-gray-100 transition-colors"
+                      >
+                        +
+                      </button>
+                      <div className="mx-1 h-4 w-px bg-gray-200" />
+                    </>
+                  )}
                   <button
                     onClick={() => setSelectedRow(null)}
                     className="text-gray-400 hover:text-gray-600 transition-colors"
@@ -155,29 +280,23 @@ function ExportView({
                   </button>
                 </div>
               </div>
+
+              {/* Content */}
               <div className="overflow-auto p-2" style={{ maxHeight: '75vh' }}>
-                <div style={{ width: `${zoom * 100}%`, minWidth: '100%' }} className="relative">
-                  <img
-                    src={`/pages/${uploadId}/page_${String(previewPageNum).padStart(3, '0')}.png`}
-                    alt={`Page ${previewPageNum}`}
-                    className="w-full rounded"
-                  />
-                  {/* Table region overlays */}
-                  {regions.map((r) => (
-                    <div
-                      key={r.index}
-                      className={`absolute left-0 w-full pointer-events-none transition-opacity ${
-                        r.index === selectedTableIdx
-                          ? 'bg-blue-400/20 border-2 border-blue-500 rounded'
-                          : 'bg-transparent'
-                      }`}
-                      style={{
-                        top: `${r.top * 100}%`,
-                        height: `${r.height * 100}%`,
-                      }}
+                {previewTab === 'image' ? (
+                  <div style={{ width: `${zoom * 100}%`, minWidth: '100%' }}>
+                    <img
+                      src={`/pages/${uploadId}/page_${String(previewPageNum).padStart(3, '0')}.png`}
+                      alt={`Page ${previewPageNum}`}
+                      className="w-full rounded"
                     />
-                  ))}
-                </div>
+                  </div>
+                ) : (
+                  <PageMarkdownView
+                    markdown={pageMarkdown}
+                    highlightTableIdx={selectedTableIdx}
+                  />
+                )}
               </div>
             </div>
           </div>
