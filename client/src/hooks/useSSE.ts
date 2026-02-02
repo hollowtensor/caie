@@ -19,7 +19,9 @@ export function useSSE(uploadId: string | null) {
     src.onmessage = (e) => {
       const data: StatusUpdate = JSON.parse(e.data)
       setStatus(data)
-      if (data.state === 'done' || data.state === 'error') {
+      if (data.state === 'error') {
+        src.close()
+      } else if (data.state === 'done' && data.extract_state !== 'running') {
         src.close()
       }
     }

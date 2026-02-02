@@ -1,4 +1,4 @@
-import type { Upload, Page, PageState, PageTables, Schema, SchemaField, ExtractResult, DetectedColumn, FieldMapping } from './types'
+import type { Upload, Page, PageState, PageTables, Schema, ExtractConfig, ScanResult, ExtractResult } from './types'
 
 export async function fetchUploads(): Promise<Upload[]> {
   const res = await fetch('/api/uploads')
@@ -51,18 +51,9 @@ export async function fetchSchemas(company?: string): Promise<Schema[]> {
   return res.json()
 }
 
-export async function createSchema(data: { company: string; name: string; fields: SchemaField[] }): Promise<Schema> {
+export async function createSchema(data: { company: string; name: string; fields: ExtractConfig }): Promise<Schema> {
   const res = await fetch('/api/schemas', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  })
-  return res.json()
-}
-
-export async function updateSchema(id: string, data: { name?: string; company?: string; fields?: SchemaField[] }): Promise<Schema> {
-  const res = await fetch(`/api/schemas/${id}`, {
-    method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   })
@@ -73,18 +64,17 @@ export async function deleteSchema(id: string): Promise<void> {
   await fetch(`/api/schemas/${id}`, { method: 'DELETE' })
 }
 
-// ---------- Extract ----------
-
-export async function fetchDetectedColumns(uploadId: string): Promise<{ columns: DetectedColumn[] }> {
-  const res = await fetch(`/api/uploads/${uploadId}/detected-columns`)
-  return res.json()
+export async function setDefaultSchema(id: string): Promise<void> {
+  await fetch(`/api/schemas/${id}/set-default`, { method: 'POST' })
 }
 
-export async function resolveColumns(
+// ---------- Extract ----------
+
+export async function scanColumns(
   uploadId: string,
-  body: { schema_id?: string; fields?: SchemaField[] }
-): Promise<{ field_mappings: FieldMapping[]; total_output_columns: number }> {
-  const res = await fetch(`/api/uploads/${uploadId}/resolve-columns`, {
+  body: { row_anchor: string; value_anchor: string },
+): Promise<ScanResult> {
+  const res = await fetch(`/api/uploads/${uploadId}/scan-columns`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -92,20 +82,20 @@ export async function resolveColumns(
   return res.json()
 }
 
-export async function extractData(uploadId: string, body: { schema_id?: string; fields?: SchemaField[] }): Promise<ExtractResult> {
+export async function extractData(uploadId: string, config: ExtractConfig): Promise<ExtractResult> {
   const res = await fetch(`/api/uploads/${uploadId}/extract`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify(config),
   })
   return res.json()
 }
 
-export async function extractCsvUrl(uploadId: string, body: { schema_id?: string; fields?: SchemaField[] }): Promise<string> {
+export async function extractCsvUrl(uploadId: string, config: ExtractConfig): Promise<string> {
   const res = await fetch(`/api/uploads/${uploadId}/extract/csv`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify(config),
   })
   const blob = await res.blob()
   return URL.createObjectURL(blob)

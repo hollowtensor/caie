@@ -154,6 +154,8 @@ def run_parse_job(uid: str, server_url: str):
 
     db_update(uid, state="done", current_page=total,
               message=f"Done — {total} pages parsed")
+    from ..routes.extract import run_auto_extract
+    run_auto_extract(uid)
 
 
 def resume_parse_job(uid: str, server_url: str):
@@ -195,6 +197,8 @@ def resume_parse_job(uid: str, server_url: str):
     if not pending:
         db_update(uid, state="done", current_page=total,
                   message=f"Done — {total} pages parsed")
+        from ..routes.extract import run_auto_extract
+        run_auto_extract(uid)
         return
 
     already_done = total - len(pending)
@@ -235,3 +239,5 @@ def resume_parse_job(uid: str, server_url: str):
 
     db_update(uid, state="done", current_page=total,
               message=f"Done — {total} pages parsed")
+    from ..routes.extract import run_auto_extract
+    run_auto_extract(uid)

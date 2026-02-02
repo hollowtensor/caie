@@ -105,12 +105,15 @@ def upload_status(uid: str):
                 yield 'data: {"error":"not found"}\n\n'
                 break
             d = json.dumps({
-                k: u[k] for k in ("state", "message", "current_page", "total_pages")
+                k: u[k] for k in ("state", "message", "current_page", "total_pages", "extract_state")
             })
             if d != last:
                 yield f"data: {d}\n\n"
                 last = d
             if u["state"] in ("done", "error"):
-                break
+                # Keep streaming if auto-extraction is still running
+                ext = u.get("extract_state")
+                if ext != "running":
+                    break
             time.sleep(0.5)
     return Response(stream(), mimetype="text/event-stream")

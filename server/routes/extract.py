@@ -1,21 +1,26 @@
 from __future__ import annotations
 
 import csv
+import os
 import re
 from io import StringIO
 
-from flask import Blueprint, Response, jsonify, request
+from flask import Blueprint, Response, jsonify, request, send_file
 
+from ..config import OUTPUT_DIR
 from ..db import (
     db_create_schema,
     db_delete_schema,
     db_get,
+    db_get_default_schema,
     db_get_schema,
     db_list_schemas,
+    db_set_default_schema,
+    db_update,
     db_update_schema,
     get_db,
 )
-from ..utils.tables import extract_tables, group_columns_by_parent
+from ..utils.tables import extract_tables
 
 bp = Blueprint("extract", __name__)
 
@@ -70,100 +75,16 @@ def delete_schema(sid: str):
     return jsonify({"ok": True})
 
 
-# ---------- Column Detection ----------
-
-@bp.route("/api/uploads/<uid>/detected-columns")
-def detected_columns(uid: str):
-    u = db_get(uid)
-    if not u:
+@bp.route("/api/schemas/<sid>/set-default", methods=["POST"])
+def set_default(sid: str):
+    s = db_get_schema(sid)
+    if not s:
         return jsonify({"error": "Not found"}), 404
-
-    conn = get_db()
-    rows = conn.execute(
-        "SELECT markdown FROM pages WHERE upload_id=? AND state='done' ORDER BY page_num",
-        (uid,),
-    ).fetchall()
-    conn.close()
-
-    seen = {}  # normalized -> column_info dict
-    for r in rows:
-        tables = extract_tables(r["markdown"] or "")
-        for t in tables:
-            for ci in t.get("column_info", []):
-                key = ci["normalized"]
-                if key not in seen:
-                    seen[key] = ci
-
-    columns = [
-        {
-            "normalized": v["normalized"],
-            "display": v["display"],
-            "parent": v["parent"],
-            "child": v["child"],
-        }
-        for v in seen.values()
-    ]
-
-    parent_groups = group_columns_by_parent(list(seen.values()))
-
-    return jsonify({"columns": columns, "parent_groups": parent_groups})
+    db_set_default_schema(sid)
+    return jsonify({"ok": True})
 
 
-# ---------- Extraction helpers ----------
-
-def _find_column(match_parent: str, match_child: str, column_info: list[dict]) -> int | None:
-    """Find column index matching parent (and optionally child) via substring."""
-    if not match_parent:
-        return None
-    p_lower = match_parent.lower()
-    c_lower = match_child.lower() if match_child else ""
-
-    for i, ci in enumerate(column_info):
-        if c_lower:
-            if p_lower in ci["parent"].lower() and c_lower in ci["child"].lower():
-                return i
-        else:
-            # Flat column: prefer exact parent with no child
-            if p_lower in ci["parent"].lower() and not ci["child"]:
-                return i
-
-    # Fallback: match display name (covers flat columns where parent == display)
-    if not c_lower:
-        for i, ci in enumerate(column_info):
-            if p_lower in ci["display"].lower():
-                return i
-
-    return None
-
-
-def _find_melt_columns(match_parent: str, column_info: list[dict]) -> list[tuple[int, str]]:
-    """Find all child columns under a matching parent. Returns [(index, child_name)]."""
-    if not match_parent:
-        return []
-    p_lower = match_parent.lower()
-    result = []
-    for i, ci in enumerate(column_info):
-        if p_lower in ci["parent"].lower() and ci["child"]:
-            result.append((i, ci["child"]))
-    return result
-
-
-def _find_reverse_melt_columns(match_text: str, column_info: list[dict]) -> list[tuple[int, str]]:
-    """Find columns where match_text appears in the child position.
-
-    Used when the melt field's match_parent isn't found as a parent but exists
-    as a child (e.g. "Unit MRP" is a child under parents like "Bottom Hole").
-    Returns [(index, parent_name)].
-    """
-    if not match_text:
-        return []
-    t_lower = match_text.lower()
-    result = []
-    for i, ci in enumerate(column_info):
-        if ci["child"] and t_lower in ci["child"].lower():
-            result.append((i, ci["parent"]))
-    return result
-
+# ---------- Helpers ----------
 
 def _load_pages(uid: str) -> list[dict]:
     """Load and pre-parse all done pages for an upload."""
@@ -187,60 +108,147 @@ def _load_pages(uid: str) -> list[dict]:
     return parsed
 
 
-def _discover_melt_children(
-    fields: list[dict], parsed_pages: list[dict]
-) -> dict[str, list[str]]:
-    """Pass 1: For each melt field, discover all unique children in order of first appearance."""
-    melt_children: dict[str, list[str]] = {}
+def _derive_variant(display_col: str, anchor: str) -> str:
+    """Derive variant name from a display column by removing anchor-matching parts.
 
-    for field in fields:
-        if not field.get("melt") or field.get("source") != "column":
-            continue
-        key = field.get("key", "")
-        p_lower = field.get("match_parent", "").strip().lower()
-        if not p_lower:
-            melt_children[key] = []
-            continue
-
-        children: list[str] = []
-        for pp in parsed_pages:
-            for t in pp["tables"]:
-                for ci in t.get("column_info", []):
-                    # Normal: match_parent is a parent, children are variants
-                    if p_lower in ci["parent"].lower() and ci["child"]:
-                        if ci["child"] not in children:
-                            children.append(ci["child"])
-                # Reverse: match_parent appears as a child, parents are variants
-                if not any(p_lower in ci["parent"].lower() for ci in t.get("column_info", [])):
-                    for ci in t.get("column_info", []):
-                        if ci["child"] and p_lower in ci["child"].lower():
-                            if ci["parent"] not in children:
-                                children.append(ci["parent"])
-        melt_children[key] = children
-
-    return melt_children
+    "Unit MRP [₹] | M7 (220V)" + "Unit MRP" → "M7 (220V)"
+    "Unit MRP [₹]"             + "Unit MRP" → ""
+    "Bottom Hole | Unit MRP [€]" + "Unit MRP" → "Bottom Hole"
+    """
+    anchor_lower = anchor.lower()
+    parts = [p.strip() for p in display_col.split(" | ")]
+    remaining = [p for p in parts if anchor_lower not in p.lower()]
+    return " | ".join(remaining)
 
 
-def _run_extraction(uid: str, fields: list[dict]) -> dict:
-    """Two-pass extraction with melt/unpivot support."""
+def _find_nearest_left(val_idx: int, ref_indices: list[int]) -> int | None:
+    """Find the nearest ref index that is <= val_idx."""
+    best = None
+    for ri in ref_indices:
+        if ri <= val_idx:
+            if best is None or ri > best:
+                best = ri
+    # Fallback: if no ref to the left, use the first ref
+    return best if best is not None else (ref_indices[0] if ref_indices else None)
+
+
+# ---------- Scan ----------
+
+def _scan_tables(uid: str, row_anchor: str, value_anchor: str) -> dict:
+    """Scan all tables for anchor matches, return discovery info."""
     parsed_pages = _load_pages(uid)
 
-    # Separate regular and melt fields
-    regular_fields = [f for f in fields if not f.get("melt")]
-    melt_fields = [f for f in fields if f.get("melt") and f.get("source") == "column"]
+    ra = row_anchor.lower()
+    va = value_anchor.lower()
 
-    # Pass 1: discover melt children
-    melt_children = _discover_melt_children(fields, parsed_pages)
+    tables_found = 0
+    pages_found: set[int] = set()
+    value_cols_seen: set[str] = set()
+    extra_cols_seen: set[str] = set()
+    value_columns: list[str] = []
+    extra_columns: list[str] = []
+
+    for pp in parsed_pages:
+        for t in pp["tables"]:
+            dc = t.get("display_columns", [])
+            has_ref = any(ra in c.lower() for c in dc)
+            has_val = any(va in c.lower() for c in dc)
+            if not (has_ref and has_val):
+                continue
+
+            tables_found += 1
+            pages_found.add(pp["page_num"])
+
+            for c in dc:
+                cl = c.lower()
+                if va in cl:
+                    if c not in value_cols_seen:
+                        value_cols_seen.add(c)
+                        value_columns.append(c)
+                elif ra not in cl:
+                    if c not in extra_cols_seen:
+                        extra_cols_seen.add(c)
+                        extra_columns.append(c)
+
+    return {
+        "tables_found": tables_found,
+        "pages_found": len(pages_found),
+        "value_columns": value_columns,
+        "extra_columns": extra_columns,
+    }
+
+
+@bp.route("/api/uploads/<uid>/scan-columns", methods=["POST"])
+def scan_columns(uid: str):
+    u = db_get(uid)
+    if not u:
+        return jsonify({"error": "Not found"}), 404
+
+    data = request.get_json(force=True)
+    row_anchor = data.get("row_anchor", "").strip()
+    value_anchor = data.get("value_anchor", "").strip()
+    if not row_anchor or not value_anchor:
+        return jsonify({"error": "Both row_anchor and value_anchor required"}), 400
+
+    result = _scan_tables(uid, row_anchor, value_anchor)
+    return jsonify(result)
+
+
+# ---------- Extraction ----------
+
+def _get_config(data: dict) -> dict | None:
+    """Extract config from request (schema_id or inline)."""
+    if "schema_id" in data:
+        schema = db_get_schema(data["schema_id"])
+        if not schema:
+            return None
+        cfg = schema["fields"]
+        # Reject old-format schemas (list instead of dict)
+        return cfg if isinstance(cfg, dict) else None
+    config = {}
+    for key in ("row_anchor", "value_anchor", "extras", "include_page", "include_heading"):
+        if key in data:
+            config[key] = data[key]
+    if not config.get("row_anchor") or not config.get("value_anchor"):
+        return None
+    return config
+
+
+def _extract(uid: str, config: dict) -> dict:
+    """Flat anchor-based extraction."""
+    parsed_pages = _load_pages(uid)
+
+    row_anchor = config.get("row_anchor", "").strip()
+    value_anchor = config.get("value_anchor", "").strip()
+    extras_list: list[str] = config.get("extras", [])
+    include_page = config.get("include_page", False)
+    include_heading = config.get("include_heading", False)
+
+    ra = row_anchor.lower()
+    va = value_anchor.lower()
+
+    # Determine if we need a Variant column (multiple distinct value columns)
+    all_value_display: set[str] = set()
+    for pp in parsed_pages:
+        for t in pp["tables"]:
+            for c in t.get("display_columns", []):
+                if va in c.lower():
+                    all_value_display.add(c)
+    has_variants = len(all_value_display) > 1
 
     # Build output column headers
-    output_columns = []
-    for f in regular_fields:
-        output_columns.append(f["label"])
-    for mf in melt_fields:
+    output_columns: list[str] = []
+    if include_page:
+        output_columns.append("Page")
+    if include_heading:
+        output_columns.append("Heading")
+    output_columns.extend(extras_list)
+    output_columns.append(row_anchor)
+    if has_variants:
         output_columns.append("Variant")
-        output_columns.append(mf["label"])
+    output_columns.append(value_anchor)
 
-    # Pass 2: extract rows
+    # Extract rows
     output_rows: list[list[str]] = []
     pages_used: set[int] = set()
 
@@ -249,89 +257,60 @@ def _run_extraction(uid: str, fields: list[dict]) -> dict:
         heading_text = pp["heading_text"]
 
         for t in pp["tables"]:
-            if not t["rows"]:
+            dc = t.get("display_columns", [])
+            rows = t.get("rows", [])
+            if not rows:
                 continue
-            col_info = t.get("column_info", [])
 
-            # If we have melt fields, check if melt text exists in this table
-            # (as parent OR as child in reverse-melt layout)
-            if melt_fields:
-                any_melt_found = False
-                for mf in melt_fields:
-                    mp = mf.get("match_parent", "").strip().lower()
-                    if not mp:
-                        continue
-                    if any(mp in ci["parent"].lower() for ci in col_info):
-                        any_melt_found = True
-                        break
-                    if any(ci["child"] and mp in ci["child"].lower() for ci in col_info):
-                        any_melt_found = True
-                        break
-                if not any_melt_found:
-                    continue  # skip tables without melt match
+            ref_indices = [i for i, c in enumerate(dc) if ra in c.lower()]
+            val_indices = [i for i, c in enumerate(dc) if va in c.lower()]
+            if not ref_indices or not val_indices:
+                continue
 
-            for data_row in t["rows"]:
-                # Skip section header rows (same text in all cells)
+            # Map extras to column indices in this table (None if missing)
+            extra_indices: list[int | None] = []
+            for ext in extras_list:
+                ext_lower = ext.lower()
+                found = None
+                for i, c in enumerate(dc):
+                    if c.lower() == ext_lower:
+                        found = i
+                        break
+                extra_indices.append(found)
+
+            for data_row in rows:
+                # Skip section header rows (all non-empty cells identical)
                 unique_vals = set(v for v in data_row if v and v != "-")
                 if len(unique_vals) <= 1:
                     continue
 
-                # Extract regular field values
-                regular_values: list[str] = []
-                for f in regular_fields:
-                    if f["source"] == "heading":
-                        regular_values.append(heading_text)
-                    elif f["source"] == "page":
-                        regular_values.append(str(page_num))
-                    elif f["source"] == "column":
-                        mp = f.get("match_parent", "").strip()
-                        mc = f.get("match_child", "").strip()
-                        idx = _find_column(mp, mc, col_info)
-                        if idx is not None and idx < len(data_row):
-                            regular_values.append(str(data_row[idx]))
-                        else:
-                            regular_values.append("-")
-                    else:
-                        regular_values.append("-")
+                for vi in val_indices:
+                    if vi >= len(data_row):
+                        continue
+                    value = data_row[vi]
+                    if not value or value == "-":
+                        continue
 
-                if not melt_fields:
-                    # No melt: one output row per data row
-                    output_rows.append(regular_values)
+                    ri = _find_nearest_left(vi, ref_indices)
+                    if ri is None:
+                        continue
+                    reference = data_row[ri] if ri < len(data_row) else "-"
+
+                    out: list[str] = []
+                    if include_page:
+                        out.append(str(page_num))
+                    if include_heading:
+                        out.append(heading_text)
+                    for ei in extra_indices:
+                        out.append(data_row[ei] if ei is not None and ei < len(data_row) else "-")
+                    out.append(reference)
+                    if has_variants:
+                        variant = _derive_variant(dc[vi], value_anchor)
+                        out.append(variant if variant else "-")
+                    out.append(value)
+
+                    output_rows.append(out)
                     pages_used.add(page_num)
-                else:
-                    # Melt: one output row per non-empty child value
-                    for mf in melt_fields:
-                        mp = mf.get("match_parent", "").strip()
-                        children_in_table = _find_melt_columns(mp, col_info)
-                        if children_in_table:
-                            for col_idx, child_name in children_in_table:
-                                if col_idx < len(data_row):
-                                    val = str(data_row[col_idx])
-                                    if val and val != "-":
-                                        out_row = regular_values + [child_name, val]
-                                        output_rows.append(out_row)
-                                        pages_used.add(page_num)
-                        else:
-                            # Reverse melt: match text in child position
-                            reverse = _find_reverse_melt_columns(mp, col_info)
-                            if reverse:
-                                for col_idx, parent_name in reverse:
-                                    if col_idx < len(data_row):
-                                        val = str(data_row[col_idx])
-                                        if val and val != "-":
-                                            variant = parent_name if len(reverse) > 1 else "-"
-                                            out_row = regular_values + [variant, val]
-                                            output_rows.append(out_row)
-                                            pages_used.add(page_num)
-                            else:
-                                # Flat fallback: parent exists but no children
-                                idx = _find_column(mp, "", col_info)
-                                if idx is not None and idx < len(data_row):
-                                    val = str(data_row[idx])
-                                    if val and val != "-":
-                                        out_row = regular_values + ["-", val]
-                                        output_rows.append(out_row)
-                                        pages_used.add(page_num)
 
     return {
         "columns": output_columns,
@@ -341,78 +320,6 @@ def _run_extraction(uid: str, fields: list[dict]) -> dict:
     }
 
 
-# ---------- Resolve columns (for mapping step) ----------
-
-def _get_fields(data: dict) -> list[dict] | None:
-    """Extract fields from request data (schema_id or inline)."""
-    if "schema_id" in data:
-        schema = db_get_schema(data["schema_id"])
-        if not schema:
-            return None
-        return schema["fields"]
-    return data.get("fields")
-
-
-@bp.route("/api/uploads/<uid>/resolve-columns", methods=["POST"])
-def resolve_columns(uid: str):
-    """Preview which output columns a schema would produce."""
-    u = db_get(uid)
-    if not u:
-        return jsonify({"error": "Not found"}), 404
-
-    data = request.get_json(force=True)
-    fields = _get_fields(data)
-    if fields is None:
-        return jsonify({"error": "Provide schema_id or fields"}), 400
-
-    parsed_pages = _load_pages(uid)
-    melt_children = _discover_melt_children(fields, parsed_pages)
-
-    field_mappings = []
-    for field in fields:
-        key = field.get("key", "")
-        source = field.get("source", "column")
-
-        if source in ("heading", "page"):
-            field_mappings.append({
-                "field": field,
-                "mode": "auto",
-                "matched_children": [],
-                "output_columns": [field["label"]],
-                "output_count": 1,
-            })
-        elif field.get("melt"):
-            children = melt_children.get(key, [])
-            field_mappings.append({
-                "field": field,
-                "mode": "melt",
-                "matched_children": children,
-                "output_columns": ["Variant", field["label"]],
-                "output_count": 2,
-            })
-        elif field.get("match_child", "").strip():
-            field_mappings.append({
-                "field": field,
-                "mode": "pin",
-                "matched_children": [],
-                "output_columns": [field["label"]],
-                "output_count": 1,
-            })
-        else:
-            field_mappings.append({
-                "field": field,
-                "mode": "flat",
-                "matched_children": [],
-                "output_columns": [field["label"]],
-                "output_count": 1,
-            })
-
-    total = sum(fm["output_count"] for fm in field_mappings)
-    return jsonify({"field_mappings": field_mappings, "total_output_columns": total})
-
-
-# ---------- Extraction endpoints ----------
-
 @bp.route("/api/uploads/<uid>/extract", methods=["POST"])
 def extract_data(uid: str):
     u = db_get(uid)
@@ -420,11 +327,11 @@ def extract_data(uid: str):
         return jsonify({"error": "Not found"}), 404
 
     data = request.get_json(force=True)
-    fields = _get_fields(data)
-    if fields is None:
-        return jsonify({"error": "Provide schema_id or fields"}), 400
+    config = _get_config(data)
+    if config is None:
+        return jsonify({"error": "Provide valid config or schema_id"}), 400
 
-    result = _run_extraction(uid, fields)
+    result = _extract(uid, config)
     return jsonify(result)
 
 
@@ -435,11 +342,11 @@ def extract_csv(uid: str):
         return jsonify({"error": "Not found"}), 404
 
     data = request.get_json(force=True)
-    fields = _get_fields(data)
-    if fields is None:
-        return jsonify({"error": "Provide schema_id or fields"}), 400
+    config = _get_config(data)
+    if config is None:
+        return jsonify({"error": "Provide valid config or schema_id"}), 400
 
-    result = _run_extraction(uid, fields)
+    result = _extract(uid, config)
 
     buf = StringIO()
     writer = csv.writer(buf)
@@ -453,4 +360,63 @@ def extract_csv(uid: str):
         headers={
             "Content-Disposition": f'attachment; filename="{basename}_extract.csv"'
         },
+    )
+
+
+# ---------- Auto-extraction ----------
+
+def run_auto_extract(uid: str):
+    """Auto-extract after parsing completes, using the company's default config."""
+    u = db_get(uid)
+    if not u:
+        return
+
+    company = u.get("company", "")
+    schema = db_get_default_schema(company)
+    if not schema:
+        db_update(uid, extract_state="no_config")
+        return
+
+    cfg = schema["fields"]
+    if not isinstance(cfg, dict) or not cfg.get("row_anchor") or not cfg.get("value_anchor"):
+        db_update(uid, extract_state="no_config")
+        return
+
+    try:
+        db_update(uid, extract_state="running")
+        result = _extract(uid, cfg)
+
+        # Write CSV to OUTPUT_DIR
+        csv_filename = f"{uid}_extract.csv"
+        csv_path = os.path.join(OUTPUT_DIR, csv_filename)
+        with open(csv_path, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(result["columns"])
+            writer.writerows(result["rows"])
+
+        db_update(uid, extract_state="done", extract_csv=csv_filename)
+    except Exception as e:
+        db_update(uid, extract_state="error")
+
+
+@bp.route("/api/uploads/<uid>/extract/download")
+def extract_download(uid: str):
+    u = db_get(uid)
+    if not u:
+        return jsonify({"error": "Not found"}), 404
+
+    csv_filename = u.get("extract_csv")
+    if not csv_filename:
+        return jsonify({"error": "No extraction available"}), 404
+
+    csv_path = os.path.join(OUTPUT_DIR, csv_filename)
+    if not os.path.exists(csv_path):
+        return jsonify({"error": "CSV file not found"}), 404
+
+    basename = u["filename"].rsplit(".", 1)[0] if u.get("filename") else uid
+    return send_file(
+        csv_path,
+        mimetype="text/csv",
+        as_attachment=True,
+        download_name=f"{basename}_extract.csv",
     )

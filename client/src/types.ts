@@ -8,6 +8,8 @@ export interface Upload {
   message: string
   total_pages: number
   current_page: number
+  extract_state: string | null
+  extract_csv: string | null
   created_at: string
 }
 
@@ -29,6 +31,7 @@ export interface StatusUpdate {
   message: string
   current_page: number
   total_pages: number
+  extract_state: string | null
 }
 
 export interface ColumnInfo {
@@ -52,28 +55,28 @@ export interface PageTables {
   tables: PageTable[]
 }
 
-export interface SchemaField {
-  key: string
-  label: string
-  source: 'column' | 'heading' | 'page'
-  match_parent: string
-  match_child: string
-  melt?: boolean
+export interface ExtractConfig {
+  row_anchor: string
+  value_anchor: string
+  extras: string[]
+  include_page: boolean
+  include_heading: boolean
 }
 
 export interface Schema {
   id: string
   company: string
   name: string
-  fields: SchemaField[]
+  fields: ExtractConfig
+  is_default: boolean
   created_at: string
 }
 
-export interface DetectedColumn {
-  normalized: string
-  display: string
-  parent: string
-  child: string
+export interface ScanResult {
+  tables_found: number
+  pages_found: number
+  value_columns: string[]
+  extra_columns: string[]
 }
 
 export interface ExtractResult {
@@ -81,18 +84,4 @@ export interface ExtractResult {
   rows: string[][]
   page_count: number
   row_count: number
-}
-
-export interface ParentGroup {
-  parent: string
-  children: string[]
-  is_flat: boolean
-}
-
-export interface FieldMapping {
-  field: SchemaField
-  mode: 'melt' | 'pin' | 'flat' | 'auto'
-  matched_children: string[]
-  output_columns: string[]
-  output_count: number
 }

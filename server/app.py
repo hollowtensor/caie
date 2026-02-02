@@ -14,11 +14,31 @@ from .db import init_db
 from .routes import register_routes
 
 
+def _auto_extract_pending():
+    """Auto-extract uploads that are parsed but have no extraction yet."""
+    from .db import get_db
+    from .routes.extract import run_auto_extract
+
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT id FROM uploads WHERE state='done' AND extract_state IS NULL"
+    ).fetchall()
+    conn.close()
+
+    if not rows:
+        return
+
+    print(f"Auto-extracting {len(rows)} previously parsed upload(s)...")
+    for r in rows:
+        run_auto_extract(r["id"])
+
+
 def create_app() -> Flask:
     app = Flask(__name__)
     CORS(app)
     init_db()
     register_routes(app)
+    _auto_extract_pending()
     return app
 
 

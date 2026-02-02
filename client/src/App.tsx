@@ -11,6 +11,7 @@ import { PageGrid } from './components/PageGrid'
 import { ProgressCard } from './components/ProgressCard'
 import { MarkdownViewer } from './components/MarkdownViewer'
 import { ExtractPage } from './components/ExtractPage'
+import { SettingsPage } from './components/SettingsPage'
 
 function HomePage() {
   const { uploads, refresh } = useUploads()
@@ -24,15 +25,17 @@ function HomePage() {
 
   useEffect(() => {
     if (status) setRefreshKey((k) => k + 1)
-  }, [status?.current_page, status?.state])
+  }, [status?.current_page, status?.state, status?.extract_state])
 
   useEffect(() => {
-    if (status?.state === 'done' || status?.state === 'error') {
+    const isDone = status?.state === 'done' || status?.state === 'error'
+    const extractDone = status?.extract_state !== 'running'
+    if (isDone && extractDone) {
       setSseId(null)
       refresh()
       if (activeId) fetchUpload(activeId).then(setActiveUpload)
     }
-  }, [status?.state])
+  }, [status?.state, status?.extract_state])
 
   const handleSelect = useCallback(async (id: string) => {
     setActiveId(id)
@@ -97,6 +100,7 @@ export default function App() {
     <Routes>
       <Route path="/" element={<HomePage />} />
       <Route path="/extract/:uploadId" element={<ExtractPage />} />
+      <Route path="/settings" element={<SettingsPage />} />
     </Routes>
   )
 }

@@ -46,9 +46,24 @@ def init_db():
                 company    TEXT NOT NULL,
                 name       TEXT NOT NULL,
                 fields     TEXT NOT NULL,
+                is_default INTEGER DEFAULT 0,
                 created_at TEXT DEFAULT (datetime('now'))
             )
         """)
+
+        # Safe migrations for existing databases
+        for col, default in [
+            ("extract_state", "NULL"),
+            ("extract_csv", "NULL"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE uploads ADD COLUMN {col} TEXT DEFAULT {default}")
+            except Exception:
+                pass
+        try:
+            conn.execute("ALTER TABLE schemas ADD COLUMN is_default INTEGER DEFAULT 0")
+        except Exception:
+            pass
 
 
 def db_update(uid: str, **kw):
@@ -68,7 +83,7 @@ def db_list() -> list[dict]:
     conn = get_db()
     rows = conn.execute(
         "SELECT id, filename, company, year, month, state, message,"
-        " total_pages, current_page, created_at"
+        " total_pages, current_page, extract_state, extract_csv, created_at"
         " FROM uploads ORDER BY created_at DESC"
     ).fetchall()
     conn.close()
@@ -99,6 +114,7 @@ def db_page_states(uid: str) -> list[dict]:
 def _schema_row_to_dict(row: sqlite3.Row) -> dict:
     d = dict(row)
     d["fields"] = json.loads(d["fields"])
+    d["is_default"] = bool(d.get("is_default", 0))
     return d
 
 
@@ -146,3 +162,26 @@ def db_update_schema(sid: str, **kw) -> dict | None:
 def db_delete_schema(sid: str):
     with get_db() as conn:
         conn.execute("DELETE FROM schemas WHERE id=?", (sid,))
+
+
+def db_set_default_schema(sid: str):
+    """Set a schema as the default for its company, unsetting any previous default."""
+    schema = db_get_schema(sid)
+    if not schema:
+        return
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE schemas SET is_default=0 WHERE company=?",
+            (schema["company"],),
+        )
+        conn.execute("UPDATE schemas SET is_default=1 WHERE id=?", (sid,))
+
+
+def db_get_default_schema(company: str) -> dict | None:
+    """Get the default schema for a company."""
+    conn = get_db()
+    row = conn.execute(
+        "SELECT * FROM schemas WHERE company=? AND is_default=1", (company,)
+    ).fetchone()
+    conn.close()
+    return _schema_row_to_dict(row) if row else None
