@@ -16,9 +16,11 @@ interface Props {
   columns: string[]
   rows: string[][]
   flags?: CellFlag[]
+  onRowClick?: (originalIndex: number) => void
+  selectedRow?: number | null
 }
 
-export function DataTable({ columns, rows, flags = [] }: Props) {
+export function DataTable({ columns, rows, flags = [], onRowClick, selectedRow }: Props) {
   const [sorting, setSorting] = useState<SortingState>([])
   const [globalFilter, setGlobalFilter] = useState('')
   const [flaggedOnly, setFlaggedOnly] = useState(false)
@@ -159,16 +161,22 @@ export function DataTable({ columns, rows, flags = [] }: Props) {
             {table.getRowModel().rows.map((row, ri) => {
               const originalIndex = rows.indexOf(row.original)
               const isRowFlagged = flaggedRows.has(originalIndex)
+              const isSelected = selectedRow === originalIndex
 
               return (
                 <tr
                   key={row.id}
+                  onClick={() => onRowClick?.(originalIndex)}
                   className={`border-b border-gray-50 transition-colors ${
-                    isRowFlagged
-                      ? 'bg-red-50/60 hover:bg-red-50'
-                      : ri % 2 === 0
-                        ? 'bg-white hover:bg-blue-50/40'
-                        : 'bg-gray-50/30 hover:bg-blue-50/40'
+                    onRowClick ? 'cursor-pointer' : ''
+                  } ${
+                    isSelected
+                      ? 'bg-blue-100 hover:bg-blue-100'
+                      : isRowFlagged
+                        ? 'bg-red-50/60 hover:bg-red-50'
+                        : ri % 2 === 0
+                          ? 'bg-white hover:bg-blue-50/40'
+                          : 'bg-gray-50/30 hover:bg-blue-50/40'
                   }`}
                 >
                   <td className="px-3 py-1.5 text-center text-[10px] text-gray-300 tabular-nums">

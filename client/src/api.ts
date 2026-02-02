@@ -1,4 +1,4 @@
-import type { Upload, Page, PageState, PageTables, Schema, ExtractConfig, ScanResult, ExtractResult } from './types'
+import type { Upload, Page, PageState, PageTables, Schema, ExtractConfig, ScanResult, ExtractResult, TableRegion } from './types'
 
 export async function fetchUploads(): Promise<Upload[]> {
   const res = await fetch('/api/uploads')
@@ -99,4 +99,9 @@ export async function extractCsvUrl(uploadId: string, config: ExtractConfig): Pr
   })
   const blob = await res.blob()
   return URL.createObjectURL(blob)
+}
+
+export async function fetchTableRegions(uploadId: string, pageNum: number): Promise<TableRegion[]> {
+  const res = await fetch(`/api/uploads/${uploadId}/page/${pageNum}/table-regions`)
+  return res.json()
 }

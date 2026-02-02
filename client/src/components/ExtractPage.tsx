@@ -1,13 +1,14 @@
-import { useCallback, useEffect, useState } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useParams, useSearchParams, Link } from 'react-router-dom'
 import {
   fetchUpload,
   fetchSchemas,
   deleteSchema,
   extractData,
   extractCsvUrl,
+  fetchTableRegions,
 } from '../api'
-import type { Upload, Schema, ExtractConfig, ExtractResult } from '../types'
+import type { Upload, Schema, ExtractConfig, ExtractResult, TableRegion } from '../types'
 import { DataTable } from './DataTable'
 
 /* ------------------------------------------------------------------ */
@@ -16,15 +17,47 @@ import { DataTable } from './DataTable'
 
 function ExportView({
   result,
+  uploadId,
   downloading,
   onDownload,
   onBack,
 }: {
   result: ExtractResult
+  uploadId: string
   downloading: boolean
   onDownload: () => void
   onBack: () => void
 }) {
+  const [selectedRow, setSelectedRow] = useState<number | null>(null)
+  const [zoom, setZoom] = useState(1)
+  const [regions, setRegions] = useState<TableRegion[]>([])
+
+  // Find the "Page" column index to get page number from row data
+  const pageColIdx = result.columns.findIndex(
+    (c) => c.toLowerCase() === 'page',
+  )
+
+  const previewPageNum =
+    selectedRow !== null && pageColIdx >= 0
+      ? parseInt(result.rows[selectedRow]?.[pageColIdx] ?? '', 10)
+      : null
+
+  const selectedTableIdx =
+    selectedRow !== null ? result.row_table_indices?.[selectedRow] ?? null : null
+
+  // Fetch table regions when page changes
+  useEffect(() => {
+    if (!previewPageNum || previewPageNum <= 0) {
+      setRegions([])
+      return
+    }
+    fetchTableRegions(uploadId, previewPageNum).then(setRegions)
+  }, [uploadId, previewPageNum])
+
+  const handleRowClick = (originalIndex: number) => {
+    setSelectedRow(originalIndex === selectedRow ? null : originalIndex)
+  }
+
   return (
     <div className="space-y-4">
       {/* Stats bar */}
@@ -72,8 +105,84 @@ function ExportView({
         </div>
       </div>
 
-      {/* Data table */}
-      <DataTable columns={result.columns} rows={result.rows} flags={result.flags} />
+      {/* Table + Page preview */}
+      <div className="flex gap-4">
+        <div className={previewPageNum ? 'flex-1 min-w-0' : 'w-full'}>
+          <DataTable
+            columns={result.columns}
+            rows={result.rows}
+            flags={result.flags}
+            onRowClick={handleRowClick}
+            selectedRow={selectedRow}
+          />
+        </div>
+
+        {/* Page preview panel */}
+        {previewPageNum && previewPageNum > 0 && (
+          <div className="w-[380px] flex-shrink-0">
+            <div className="sticky top-8 rounded-xl border border-gray-200 bg-white shadow-sm">
+              <div className="flex items-center justify-between border-b border-gray-100 px-4 py-2">
+                <span className="text-xs font-semibold text-gray-600">
+                  Page {previewPageNum}
+                </span>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => setZoom((z) => Math.max(0.5, z - 0.25))}
+                    className="rounded px-1.5 py-0.5 text-[11px] font-medium text-gray-500 hover:bg-gray-100 transition-colors"
+                  >
+                    -
+                  </button>
+                  <button
+                    onClick={() => setZoom(1)}
+                    className="rounded px-1.5 py-0.5 text-[10px] font-medium text-gray-400 hover:bg-gray-100 tabular-nums transition-colors"
+                  >
+                    {Math.round(zoom * 100)}%
+                  </button>
+                  <button
+                    onClick={() => setZoom((z) => Math.min(3, z + 0.25))}
+                    className="rounded px-1.5 py-0.5 text-[11px] font-medium text-gray-500 hover:bg-gray-100 transition-colors"
+                  >
+                    +
+                  </button>
+                  <div className="mx-1 h-4 w-px bg-gray-200" />
+                  <button
+                    onClick={() => setSelectedRow(null)}
+                    className="text-gray-400 hover:text-gray-600 transition-colors"
+                  >
+                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+              <div className="overflow-auto p-2" style={{ maxHeight: '75vh' }}>
+                <div style={{ width: `${zoom * 100}%`, minWidth: '100%' }} className="relative">
+                  <img
+                    src={`/pages/${uploadId}/page_${String(previewPageNum).padStart(3, '0')}.png`}
+                    alt={`Page ${previewPageNum}`}
+                    className="w-full rounded"
+                  />
+                  {/* Table region overlays */}
+                  {regions.map((r) => (
+                    <div
+                      key={r.index}
+                      className={`absolute left-0 w-full pointer-events-none transition-opacity ${
+                        r.index === selectedTableIdx
+                          ? 'bg-blue-400/20 border-2 border-blue-500 rounded'
+                          : 'bg-transparent'
+                      }`}
+                      style={{
+                        top: `${r.top * 100}%`,
+                        height: `${r.height * 100}%`,
+                      }}
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -84,9 +193,12 @@ function ExportView({
 
 export function ExtractPage() {
   const { uploadId } = useParams<{ uploadId: string }>()
+  const [searchParams] = useSearchParams()
+  const isCustom = searchParams.get('custom') === '1'
   const [upload, setUpload] = useState<Upload | null>(null)
   const [schemas, setSchemas] = useState<Schema[]>([])
   const [result, setResult] = useState<ExtractResult | null>(null)
+  const autoRan = useRef(false)
 
   const [config, setConfig] = useState<ExtractConfig>({
     row_anchor: '',
@@ -108,6 +220,23 @@ export function ExtractPage() {
     if (upload) fetchSchemas(upload.company).then(setSchemas)
   }, [upload])
   useEffect(() => { loadSchemas() }, [loadSchemas])
+
+  // Auto-run extraction with default config when coming from "View Results"
+  useEffect(() => {
+    if (autoRan.current || isCustom || !uploadId || !upload || schemas.length === 0) return
+    if (upload.extract_state !== 'done') return
+    const defaultSchema = schemas.find((s) => s.is_default)
+    if (!defaultSchema) return
+    autoRan.current = true
+    const cfg = defaultSchema.fields
+    setConfig(cfg)
+    setExtrasText(cfg.extras.join(', '))
+    setLoading(true)
+    extractData(uploadId, cfg).then((res) => {
+      setResult(res)
+      setLoading(false)
+    })
+  }, [uploadId, upload, schemas, isCustom])
 
   const handleLoadSchema = (s: Schema) => {
     setConfig(s.fields)
@@ -148,18 +277,22 @@ export function ExtractPage() {
     setDownloading(false)
   }
 
-  if (!upload) {
-    return <div className="flex h-screen items-center justify-center text-sm text-gray-400">Loading...</div>
+  if (!upload || (loading && !result)) {
+    return <div className="flex h-screen items-center justify-center text-sm text-gray-400">
+      {loading ? 'Extracting...' : 'Loading...'}
+    </div>
   }
 
   return (
-    <div className="mx-auto max-w-5xl px-6 py-8">
+    <div className={`mx-auto px-6 py-8 ${result ? 'max-w-[1400px]' : 'max-w-5xl'}`}>
       {/* Header */}
       <div className="mb-6">
         <Link to="/" className="text-[10px] text-blue-500 hover:text-blue-600 font-medium">
           ← Back
         </Link>
-        <h1 className="mt-1 text-lg font-bold text-gray-900">Custom Extract — {upload.filename}</h1>
+        <h1 className="mt-1 text-lg font-bold text-gray-900">
+          {result && !isCustom ? 'Extraction Results' : 'Custom Extract'} — {upload.filename}
+        </h1>
         <p className="text-[11px] text-gray-400">
           {upload.company} · {upload.total_pages} pages
         </p>
@@ -168,6 +301,7 @@ export function ExtractPage() {
       {result ? (
         <ExportView
           result={result}
+          uploadId={uploadId!}
           downloading={downloading}
           onDownload={handleDownload}
           onBack={() => setResult(null)}

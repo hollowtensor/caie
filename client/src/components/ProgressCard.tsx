@@ -56,17 +56,17 @@ export function ProgressCard({ status, upload, uploadId, onResume }: Props) {
         <div className="border-t border-gray-100 pt-3">
           {extractState === 'done' ? (
             <div className="flex items-center gap-2">
-              <a
-                href={`/api/uploads/${uploadId}/extract/download`}
+              <Link
+                to={`/extract/${uploadId}`}
                 className="inline-flex items-center gap-1.5 rounded-lg bg-green-500 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-green-600"
               >
                 <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M3 14h18m-9-4v8m-7 0h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
                 </svg>
-                Download CSV
-              </a>
+                View Results
+              </Link>
               <Link
-                to={`/extract/${uploadId}`}
+                to={`/extract/${uploadId}?custom=1`}
                 className="rounded-lg border border-gray-200 px-3 py-2 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-50"
               >
                 Custom Extract

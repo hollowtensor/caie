@@ -265,13 +265,14 @@ def _extract(uid: str, config: dict) -> dict:
 
     # Extract rows
     output_rows: list[list[str]] = []
+    row_table_indices: list[int] = []
     pages_used: set[int] = set()
 
     for pp in parsed_pages:
         page_num = pp["page_num"]
         heading_text = pp["heading_text"]
 
-        for t in pp["tables"]:
+        for ti, t in enumerate(pp["tables"]):
             dc = t.get("display_columns", [])
             rows = t.get("rows", [])
             if not rows:
@@ -325,6 +326,7 @@ def _extract(uid: str, config: dict) -> dict:
                     out.append(value)
 
                     output_rows.append(out)
+                    row_table_indices.append(ti)
                     pages_used.add(page_num)
 
     flags = _detect_anomalies(output_columns, output_rows)
@@ -336,6 +338,7 @@ def _extract(uid: str, config: dict) -> dict:
         "flagged_count": len({f["row"] for f in flags}),
         "page_count": len(pages_used),
         "row_count": len(output_rows),
+        "row_table_indices": row_table_indices,
     }
 
 

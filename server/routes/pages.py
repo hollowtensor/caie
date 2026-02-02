@@ -67,6 +67,50 @@ def combined_markdown(uid: str):
     )
 
 
+def _estimate_table_regions(markdown: str) -> list[dict]:
+    """Estimate vertical positions of tables on a page from markdown structure."""
+    parts = re.split(r"(<table.*?</table>)", markdown, flags=re.DOTALL | re.IGNORECASE)
+
+    segments: list[tuple] = []  # ('text', weight) or ('table', weight, index)
+    table_idx = 0
+
+    for part in parts:
+        stripped = part.strip()
+        if stripped.lower().startswith("<table"):
+            row_count = len(re.findall(r"<tr", part, re.IGNORECASE))
+            segments.append(("table", max(row_count, 1), table_idx))
+            table_idx += 1
+        else:
+            text_lines = len([l for l in part.split("\n") if l.strip()])
+            if text_lines > 0:
+                segments.append(("text", text_lines))
+
+    total_weight = sum(s[1] for s in segments)
+    if total_weight == 0:
+        return []
+
+    regions = []
+    current_pos = 0
+    for seg in segments:
+        if seg[0] == "table":
+            regions.append({
+                "index": seg[2],
+                "top": current_pos / total_weight,
+                "height": seg[1] / total_weight,
+            })
+        current_pos += seg[1]
+
+    return regions
+
+
+@bp.route("/api/uploads/<uid>/page/<int:page_num>/table-regions")
+def table_regions(uid: str, page_num: int):
+    p = db_get_page(uid, page_num)
+    if not p:
+        return jsonify([])
+    return jsonify(_estimate_table_regions(p.get("markdown") or ""))
+
+
 @bp.route("/api/uploads/<uid>/page/<int:page_num>/tables")
 def page_tables(uid: str, page_num: int):
     p = db_get_page(uid, page_num)

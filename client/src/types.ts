@@ -85,6 +85,12 @@ export interface CellFlag {
   reason: string
 }
 
+export interface TableRegion {
+  index: number
+  top: number
+  height: number
+}
+
 export interface ExtractResult {
   columns: string[]
   rows: string[][]
@@ -92,4 +98,5 @@ export interface ExtractResult {
   flagged_count: number
   page_count: number
   row_count: number
+  row_table_indices: number[]
 }
