@@ -18,3 +18,7 @@ SERVER_URL: str = os.environ.get("LIGHTONOCR_SERVER_URL", "http://localhost:8000
 # VLM for table validation (LM Studio / RunPod)
 VLM_SERVER_URL: str = os.environ.get("VLM_SERVER_URL", "http://localhost:1234/v1")
 VLM_MODEL: str = os.environ.get("VLM_MODEL", "qwen/qwen3-vl-8b")
+
+# LLM for table correction (text-only, uses markdown context)
+LLM_SERVER_URL: str = os.environ.get("LLM_SERVER_URL", "http://localhost:1234/v1")
+LLM_MODEL: str = os.environ.get("LLM_MODEL", "gpt-oss-20b")

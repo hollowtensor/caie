@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   useReactTable,
   getCoreRowModel,
@@ -35,6 +35,13 @@ export function DataTable({ columns, rows, flags = [], onRowClick, selectedRow }
     }
     return { flagMap: map, flaggedRows: rowSet }
   }, [flags])
+
+  // Auto-disable flagged filter when no flags remain
+  useEffect(() => {
+    if (flaggedRows.size === 0 && flaggedOnly) {
+      setFlaggedOnly(false)
+    }
+  }, [flaggedRows, flaggedOnly])
 
   const columnDefs = useMemo<ColumnDef<string[]>[]>(
     () =>

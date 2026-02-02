@@ -11,7 +11,7 @@ import httpx
 from flask import Blueprint, Response, jsonify, request, send_from_directory
 from PIL import Image
 
-from ..config import PAGES_DIR, VLM_MODEL, VLM_SERVER_URL
+from ..config import LLM_MODEL, LLM_SERVER_URL, PAGES_DIR, VLM_MODEL, VLM_SERVER_URL
 from ..db import db_get, db_get_page, db_page_states, get_db
 from ..utils.tables import extract_tables
 
@@ -195,13 +195,20 @@ def _call_vlm(image_path: str, heading: str) -> str:
     table_hint = f'The table is under the heading/section: "{heading}"' if heading else "Extract the main table"
 
     prompt = (
-        f"Look at this page image. {table_hint}.\n\n"
-        "Your task: Read this table directly from the image and output it as clean HTML.\n\n"
-        "RULES:\n"
-        "- Read every cell value exactly as shown in the image.\n"
-        "- Use proper <table>, <thead>, <tbody>, <tr>, <th>, <td> tags.\n"
-        "- Use colspan/rowspan where the image shows merged cells.\n"
-        "- Output ONLY the <table>...</table> HTML, nothing else.\n"
+        f"This is a product pricelist page. {table_hint}.\n\n"
+        "Extract this table from the image into clean HTML. Read every value directly from the image.\n\n"
+        "STRUCTURE:\n"
+        "- Use <table>, <thead>, <tbody>, <tr>, <th>, <td> tags.\n"
+        "- Use colspan for headers that span multiple columns (e.g. a \"Unit MRP\" header spanning price sub-columns).\n"
+        "- Use rowspan for cells that span multiple rows (e.g. a frame/category label covering several product rows).\n"
+        "- Put header rows in <thead>, data rows in <tbody>.\n"
+        "- Multi-level headers: if there are sub-columns (like voltage variants B5, F5, M5, N5 under a main header), "
+        "use two <tr> rows in <thead> with appropriate colspan.\n\n"
+        "VALUES:\n"
+        "- Copy every cell value exactly: product references (e.g. LC1E06008*IN), prices (e.g. 2290), dashes (-) for unavailable.\n"
+        "- Preserve special characters: *, ✓, ₹, etc.\n"
+        "- Do NOT skip or merge data rows. Each product row in the image = one <tr> in <tbody>.\n\n"
+        "Output ONLY the <table>...</table> HTML. No explanation, no markdown fences.\n"
     )
 
     payload = {
@@ -235,10 +242,165 @@ def _call_vlm(image_path: str, heading: str) -> str:
     return content
 
 
+def _analyze_table(table_html: str) -> str:
+    """Analyze table structure and return a diagnosis of issues found."""
+    from html.parser import HTMLParser
+
+    class TableAnalyzer(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.rows: list[list[dict]] = []  # each row = list of cells
+            self.current_row: list[dict] | None = None
+            self.current_cell: dict | None = None
+            self.in_thead = False
+            self.in_tbody = False
+            self.thead_rows: list[list[dict]] = []
+            self.tbody_rows: list[list[dict]] = []
+
+        def handle_starttag(self, tag, attrs):
+            a = dict(attrs)
+            if tag == "thead":
+                self.in_thead = True
+            elif tag == "tbody":
+                self.in_tbody = True
+            elif tag == "tr":
+                self.current_row = []
+            elif tag in ("td", "th"):
+                self.current_cell = {
+                    "tag": tag,
+                    "colspan": int(a.get("colspan", 1)),
+                    "rowspan": int(a.get("rowspan", 1)),
+                    "text": "",
+                }
+
+        def handle_endtag(self, tag):
+            if tag == "thead":
+                self.in_thead = False
+            elif tag == "tbody":
+                self.in_tbody = False
+            elif tag == "tr" and self.current_row is not None:
+                if self.in_thead:
+                    self.thead_rows.append(self.current_row)
+                else:
+                    self.tbody_rows.append(self.current_row)
+                self.current_row = None
+            elif tag in ("td", "th") and self.current_cell is not None:
+                if self.current_row is not None:
+                    self.current_row.append(self.current_cell)
+                self.current_cell = None
+
+        def handle_data(self, data):
+            if self.current_cell is not None:
+                self.current_cell["text"] += data.strip()
+
+    analyzer = TableAnalyzer()
+    analyzer.feed(table_html)
+
+    lines = []
+
+    # Header analysis
+    header_cols = 0
+    for i, row in enumerate(analyzer.thead_rows):
+        cols = sum(c["colspan"] for c in row)
+        lines.append(f"Header row {i}: {cols} columns — [{', '.join(repr(c['text']) for c in row)}]")
+        header_cols = max(header_cols, cols)
+
+    # Body analysis — track active rowspans
+    active_rowspans: list[int] = []  # remaining rowspan count per column slot
+    issues = []
+
+    for i, row in enumerate(analyzer.tbody_rows):
+        # Count columns from active rowspans carrying over
+        inherited = sum(1 for rs in active_rowspans if rs > 0)
+        explicit = sum(c["colspan"] for c in row)
+        total = inherited + explicit
+
+        cell_texts = [repr(c["text"][:30]) for c in row]
+        lines.append(f"Body row {i}: {explicit} explicit cells + {inherited} from rowspan = {total} total — [{', '.join(cell_texts)}]")
+
+        if total != header_cols and header_cols > 0:
+            issues.append(f"Row {i}: has {total} columns but header expects {header_cols}")
+
+        # Update rowspans: decrement existing, add new
+        new_spans = [0] * max(header_cols, total)
+        slot = 0
+        rs_idx = 0
+        cell_idx = 0
+        for s in range(len(new_spans)):
+            if rs_idx < len(active_rowspans) and active_rowspans[rs_idx] > 0:
+                new_spans[s] = active_rowspans[rs_idx] - 1
+                rs_idx += 1
+            elif cell_idx < len(row):
+                new_spans[s] = row[cell_idx]["rowspan"] - 1
+                cell_idx += 1
+                rs_idx += 1
+            else:
+                rs_idx += 1
+        active_rowspans = new_spans
+
+    if issues:
+        lines.append(f"\nISSUES FOUND: {len(issues)}")
+        for issue in issues:
+            lines.append(f"  - {issue}")
+    else:
+        lines.append("\nNo column count mismatches detected.")
+
+    return "\n".join(lines)
+
+
+def _call_llm(page_markdown: str, table_html: str, heading: str) -> str:
+    """Send table + structural diagnosis to LLM for correction."""
+    diagnosis = _analyze_table(table_html)
+
+    prompt = (
+        "You are fixing an OCR-parsed HTML table from a product pricelist.\n\n"
+        f'Table is under the heading: "{heading}"\n\n'
+        "--- STRUCTURAL ANALYSIS ---\n"
+        f"{diagnosis}\n\n"
+        "--- TABLE HTML TO FIX ---\n"
+        f"{table_html}\n\n"
+        "--- FULL PAGE MARKDOWN (for context) ---\n"
+        f"{page_markdown}\n\n"
+        "--- INSTRUCTIONS ---\n"
+        "Fix the table HTML so that:\n"
+        "1. Every row (header and body) has the SAME total column count "
+        "(accounting for colspan and rowspan).\n"
+        "2. If a header is missing (e.g. body has more columns than header), "
+        "add the missing <th> with an appropriate label inferred from the data values.\n"
+        "3. If rowspan values are wrong (a group of rows under one label has the wrong count), "
+        "fix the rowspan number to match the actual number of rows in that group.\n"
+        "4. Preserve ALL cell text values exactly. Do not change, reorder, or remove any data.\n"
+        "5. Use <thead>/<tbody> properly.\n\n"
+        "Output ONLY the fixed <table>...</table> HTML. No explanation, no markdown fences.\n"
+    )
+
+    payload = {
+        "model": LLM_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 8192,
+        "temperature": 0.0,
+        "stream": False,
+    }
+
+    resp = httpx.post(
+        f"{LLM_SERVER_URL}/chat/completions",
+        json=payload,
+        timeout=300.0,
+    )
+    resp.raise_for_status()
+    content = resp.json()["choices"][0]["message"]["content"]
+
+    m = re.search(r"<table[\s\S]*?</table>", content, re.IGNORECASE)
+    if m:
+        return m.group()
+    return content
+
+
 @bp.route("/api/uploads/<uid>/page/<int:page_num>/validate-table", methods=["POST"])
 def validate_table(uid: str, page_num: int):
     body = request.get_json(force=True) or {}
     table_index = body.get("table_index", 0)
+    method = body.get("method", "vlm")  # "vlm" or "llm"
 
     p = db_get_page(uid, page_num)
     if not p:
@@ -252,16 +414,17 @@ def validate_table(uid: str, page_num: int):
     original_html = blocks[table_index][2]
     heading = _find_heading_before_table(md, blocks[table_index][0])
 
-    # Find page image
-    image_path = os.path.join(PAGES_DIR, uid, f"page_{page_num:03d}.png")
-    if not os.path.exists(image_path):
-        return jsonify({"error": "Page image not found"}), 404
-
     try:
-        corrected_html = _call_vlm(image_path, heading)
+        if method == "llm":
+            corrected_html = _call_llm(md, original_html, heading)
+        else:
+            image_path = os.path.join(PAGES_DIR, uid, f"page_{page_num:03d}.png")
+            if not os.path.exists(image_path):
+                return jsonify({"error": "Page image not found"}), 404
+            corrected_html = _call_vlm(image_path, heading)
     except Exception as e:
-        log.exception("VLM call failed")
-        return jsonify({"error": f"VLM error: {e}"}), 502
+        log.exception("%s call failed", method.upper())
+        return jsonify({"error": f"{method.upper()} error: {e}"}), 502
 
     return jsonify({
         "original": original_html,

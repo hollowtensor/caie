@@ -110,15 +110,16 @@ export async function validateTable(
   uploadId: string,
   pageNum: number,
   tableIndex: number,
+  method: 'vlm' | 'llm' = 'vlm',
 ): Promise<{ original: string; corrected: string }> {
   const res = await fetch(`/api/uploads/${uploadId}/page/${pageNum}/validate-table`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ table_index: tableIndex }),
+    body: JSON.stringify({ table_index: tableIndex, method }),
   })
   if (!res.ok) {
     const err = await res.json()
-    throw new Error(err.error || 'VLM validation failed')
+    throw new Error(err.error || 'Validation failed')
   }
   return res.json()
 }
