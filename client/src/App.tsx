@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { Routes, Route } from 'react-router-dom'
 import { fetchUpload, resumeUpload } from './api'
 import type { Upload } from './types'
 import { useUploads } from './hooks/useUploads'
@@ -9,8 +10,9 @@ import { UploadList } from './components/UploadList'
 import { PageGrid } from './components/PageGrid'
 import { ProgressCard } from './components/ProgressCard'
 import { MarkdownViewer } from './components/MarkdownViewer'
+import { ExtractPage } from './components/ExtractPage'
 
-export default function App() {
+function HomePage() {
   const { uploads, refresh } = useUploads()
   const [activeId, setActiveId] = useState<string | null>(null)
   const [activePage, setActivePage] = useState<number | null>(null)
@@ -18,15 +20,12 @@ export default function App() {
   const [refreshKey, setRefreshKey] = useState(0)
   const [sseId, setSseId] = useState<string | null>(null)
 
-  // SSE only for explicitly started/resumed jobs (not stale uploads)
   const status = useSSE(sseId)
 
-  // Bump refreshKey when SSE updates (so PageGrid re-fetches states)
   useEffect(() => {
     if (status) setRefreshKey((k) => k + 1)
   }, [status?.current_page, status?.state])
 
-  // When SSE reports done/error, stop SSE and refresh
   useEffect(() => {
     if (status?.state === 'done' || status?.state === 'error') {
       setSseId(null)
@@ -91,4 +90,13 @@ export default function App() {
   )
 
   return <Layout left={left} right={right} />
+}
+
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/" element={<HomePage />} />
+      <Route path="/extract/:uploadId" element={<ExtractPage />} />
+    </Routes>
+  )
 }

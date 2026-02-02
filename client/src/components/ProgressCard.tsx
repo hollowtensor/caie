@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom'
 import type { StatusUpdate } from '../types'
 
 interface Props {
@@ -36,10 +37,16 @@ export function ProgressCard({ status, upload, uploadId, onResume }: Props) {
             </button>
           )}
           {isDone && uploadId && (
-            <a href={`/api/uploads/${uploadId}/markdown`}
-              className="rounded border border-gray-200 bg-white px-3 py-1 text-[11px] font-medium text-gray-600 transition-colors hover:bg-gray-50">
-              Download All
-            </a>
+            <>
+              <Link to={`/extract/${uploadId}`}
+                className="rounded bg-blue-500 px-3 py-1 text-[11px] font-semibold text-white transition-colors hover:bg-blue-600">
+                Extract Pricelist
+              </Link>
+              <a href={`/api/uploads/${uploadId}/markdown`}
+                className="rounded border border-gray-200 bg-white px-3 py-1 text-[11px] font-medium text-gray-600 transition-colors hover:bg-gray-50">
+                Download All
+              </a>
+            </>
           )}
         </div>
       </div>

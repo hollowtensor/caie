@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import sqlite3
+import uuid
 
 from .config import DB_PATH
 
@@ -36,6 +38,15 @@ def init_db():
                 state     TEXT NOT NULL DEFAULT 'pending',
                 error     TEXT,
                 PRIMARY KEY (upload_id, page_num)
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS schemas (
+                id         TEXT PRIMARY KEY,
+                company    TEXT NOT NULL,
+                name       TEXT NOT NULL,
+                fields     TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now'))
             )
         """)
 
@@ -81,3 +92,57 @@ def db_page_states(uid: str) -> list[dict]:
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+# ---------- Schema helpers ----------
+
+def _schema_row_to_dict(row: sqlite3.Row) -> dict:
+    d = dict(row)
+    d["fields"] = json.loads(d["fields"])
+    return d
+
+
+def db_create_schema(company: str, name: str, fields: list[dict]) -> dict:
+    sid = uuid.uuid4().hex[:12]
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO schemas (id, company, name, fields) VALUES (?,?,?,?)",
+            (sid, company, name, json.dumps(fields)),
+        )
+    return db_get_schema(sid)  # type: ignore
+
+
+def db_get_schema(sid: str) -> dict | None:
+    conn = get_db()
+    row = conn.execute("SELECT * FROM schemas WHERE id=?", (sid,)).fetchone()
+    conn.close()
+    return _schema_row_to_dict(row) if row else None
+
+
+def db_list_schemas(company: str | None = None) -> list[dict]:
+    conn = get_db()
+    if company:
+        rows = conn.execute(
+            "SELECT * FROM schemas WHERE company=? ORDER BY created_at DESC",
+            (company,),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM schemas ORDER BY created_at DESC"
+        ).fetchall()
+    conn.close()
+    return [_schema_row_to_dict(r) for r in rows]
+
+
+def db_update_schema(sid: str, **kw) -> dict | None:
+    if "fields" in kw:
+        kw["fields"] = json.dumps(kw["fields"])
+    with get_db() as conn:
+        sets = ", ".join(f"{k}=?" for k in kw)
+        conn.execute(f"UPDATE schemas SET {sets} WHERE id=?", [*kw.values(), sid])
+    return db_get_schema(sid)
+
+
+def db_delete_schema(sid: str):
+    with get_db() as conn:
+        conn.execute("DELETE FROM schemas WHERE id=?", (sid,))
