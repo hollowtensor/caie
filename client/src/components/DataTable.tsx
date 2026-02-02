@@ -8,16 +8,31 @@ import {
   flexRender,
   type SortingState,
   type ColumnDef,
+  type FilterFn,
 } from '@tanstack/react-table'
+import type { CellFlag } from '../types'
 
 interface Props {
   columns: string[]
   rows: string[][]
+  flags?: CellFlag[]
 }
 
-export function DataTable({ columns, rows }: Props) {
+export function DataTable({ columns, rows, flags = [] }: Props) {
   const [sorting, setSorting] = useState<SortingState>([])
   const [globalFilter, setGlobalFilter] = useState('')
+  const [flaggedOnly, setFlaggedOnly] = useState(false)
+
+  // Build lookup maps for O(1) flag checking
+  const { flagMap, flaggedRows } = useMemo(() => {
+    const map = new Map<string, string>() // "row:col" → reason
+    const rowSet = new Set<number>()
+    for (const f of flags) {
+      map.set(`${f.row}:${f.col}`, f.reason)
+      rowSet.add(f.row)
+    }
+    return { flagMap: map, flaggedRows: rowSet }
+  }, [flags])
 
   const columnDefs = useMemo<ColumnDef<string[]>[]>(
     () =>
@@ -30,12 +45,34 @@ export function DataTable({ columns, rows }: Props) {
     [columns],
   )
 
+  // Custom global filter that also supports flagged-only mode
+  const globalFilterFn: FilterFn<string[]> = useMemo(
+    () => (row, _columnId, filterValue) => {
+      const originalIndex = rows.indexOf(row.original)
+
+      // If flagged-only mode is on, exclude non-flagged rows
+      if (flaggedOnly && !flaggedRows.has(originalIndex)) {
+        return false
+      }
+
+      // Text search
+      if (filterValue) {
+        const search = (filterValue as string).toLowerCase()
+        return row.original.some((cell) => cell.toLowerCase().includes(search))
+      }
+
+      return true
+    },
+    [rows, flaggedOnly, flaggedRows],
+  )
+
   const table = useReactTable({
     data: rows,
     columns: columnDefs,
-    state: { sorting, globalFilter },
+    state: { sorting, globalFilter: flaggedOnly ? (globalFilter || ' ') : globalFilter },
     onSortingChange: setSorting,
     onGlobalFilterChange: setGlobalFilter,
+    globalFilterFn,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
@@ -66,6 +103,25 @@ export function DataTable({ columns, rows }: Props) {
             className="w-full rounded-lg border border-gray-200 bg-white py-2 pl-9 pr-3 text-xs text-gray-700 placeholder-gray-400 focus:border-blue-400 focus:outline-none"
           />
         </div>
+
+        {/* Flagged-only toggle */}
+        {flags.length > 0 && (
+          <button
+            onClick={() => { setFlaggedOnly(!flaggedOnly); table.setPageIndex(0) }}
+            className={`flex items-center gap-1.5 whitespace-nowrap rounded-lg border px-3 py-2 text-[11px] font-medium transition-colors ${
+              flaggedOnly
+                ? 'border-red-300 bg-red-50 text-red-700'
+                : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+            </svg>
+            {flaggedOnly ? `Showing ${flaggedRows.size} flagged` : `${flaggedRows.size} flagged`}
+          </button>
+        )}
+
         <span className="text-[11px] text-gray-400 whitespace-nowrap">
           {filteredCount === rows.length
             ? `${rows.length} rows`
@@ -91,7 +147,7 @@ export function DataTable({ columns, rows }: Props) {
                     <div className="flex items-center gap-1">
                       {flexRender(header.column.columnDef.header, header.getContext())}
                       <span className="text-gray-300">
-                        {{ asc: ' ↑', desc: ' ↓' }[header.column.getIsSorted() as string] ?? ''}
+                        {{ asc: ' \u2191', desc: ' \u2193' }[header.column.getIsSorted() as string] ?? ''}
                       </span>
                     </div>
                   </th>
@@ -100,23 +156,52 @@ export function DataTable({ columns, rows }: Props) {
             ))}
           </thead>
           <tbody>
-            {table.getRowModel().rows.map((row, ri) => (
-              <tr
-                key={row.id}
-                className={`border-b border-gray-50 transition-colors hover:bg-blue-50/40 ${
-                  ri % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'
-                }`}
-              >
-                <td className="px-3 py-1.5 text-center text-[10px] text-gray-300 tabular-nums">
-                  {pageIndex * table.getState().pagination.pageSize + ri + 1}
-                </td>
-                {row.getVisibleCells().map((cell) => (
-                  <td key={cell.id} className="whitespace-nowrap px-3 py-1.5 text-gray-700">
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
+            {table.getRowModel().rows.map((row, ri) => {
+              const originalIndex = rows.indexOf(row.original)
+              const isRowFlagged = flaggedRows.has(originalIndex)
+
+              return (
+                <tr
+                  key={row.id}
+                  className={`border-b border-gray-50 transition-colors ${
+                    isRowFlagged
+                      ? 'bg-red-50/60 hover:bg-red-50'
+                      : ri % 2 === 0
+                        ? 'bg-white hover:bg-blue-50/40'
+                        : 'bg-gray-50/30 hover:bg-blue-50/40'
+                  }`}
+                >
+                  <td className="px-3 py-1.5 text-center text-[10px] text-gray-300 tabular-nums">
+                    {pageIndex * table.getState().pagination.pageSize + ri + 1}
                   </td>
-                ))}
-              </tr>
-            ))}
+                  {row.getVisibleCells().map((cell) => {
+                    const colIdx = Number(cell.column.id)
+                    const flagReason = flagMap.get(`${originalIndex}:${colIdx}`)
+
+                    return (
+                      <td
+                        key={cell.id}
+                        className={`whitespace-nowrap px-3 py-1.5 ${
+                          flagReason
+                            ? 'text-red-700 font-medium'
+                            : 'text-gray-700'
+                        }`}
+                        title={flagReason || undefined}
+                      >
+                        <span className="inline-flex items-center gap-1">
+                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                          {flagReason && (
+                            <span className="inline-flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full bg-red-100 text-[9px] text-red-500" title={flagReason}>
+                              !
+                            </span>
+                          )}
+                        </span>
+                      </td>
+                    )
+                  })}
+                </tr>
+              )
+            })}
             {table.getRowModel().rows.length === 0 && (
               <tr>
                 <td colSpan={columns.length + 1} className="px-3 py-8 text-center text-xs text-gray-400">

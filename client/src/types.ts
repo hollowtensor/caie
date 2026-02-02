@@ -79,9 +79,17 @@ export interface ScanResult {
   extra_columns: string[]
 }
 
+export interface CellFlag {
+  row: number
+  col: number
+  reason: string
+}
+
 export interface ExtractResult {
   columns: string[]
   rows: string[][]
+  flags: CellFlag[]
+  flagged_count: number
   page_count: number
   row_count: number
 }

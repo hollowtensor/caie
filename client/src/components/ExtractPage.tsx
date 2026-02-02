@@ -43,6 +43,15 @@ function ExportView({
           <span className="text-xl font-bold text-gray-800">{result.columns.length}</span>
           <span className="text-[10px] uppercase text-gray-400">Columns</span>
         </div>
+        {result.flagged_count > 0 && (
+          <>
+            <div className="h-5 w-px bg-gray-200" />
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-xl font-bold text-red-500">{result.flagged_count}</span>
+              <span className="text-[10px] uppercase text-red-400">Flagged</span>
+            </div>
+          </>
+        )}
         <div className="ml-auto flex items-center gap-2">
           <button
             onClick={onBack}
@@ -64,7 +73,7 @@ function ExportView({
       </div>
 
       {/* Data table */}
-      <DataTable columns={result.columns} rows={result.rows} />
+      <DataTable columns={result.columns} rows={result.rows} flags={result.flags} />
     </div>
   )
 }

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import csv
+import math
 import os
 import re
+from collections import Counter
 from io import StringIO
 
 from flask import Blueprint, Response, jsonify, request, send_file
@@ -81,6 +83,19 @@ def set_default(sid: str):
     if not s:
         return jsonify({"error": "Not found"}), 404
     db_set_default_schema(sid)
+
+    # Re-extract uploads for this company that had no config or errored
+    company = s["company"]
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT id FROM uploads WHERE company=? AND state='done'"
+        " AND (extract_state IS NULL OR extract_state IN ('no_config', 'error'))",
+        (company,),
+    ).fetchall()
+    conn.close()
+    for r in rows:
+        run_auto_extract(r["id"])
+
     return jsonify({"ok": True})
 
 
@@ -312,12 +327,141 @@ def _extract(uid: str, config: dict) -> dict:
                     output_rows.append(out)
                     pages_used.add(page_num)
 
+    flags = _detect_anomalies(output_columns, output_rows)
+
     return {
         "columns": output_columns,
         "rows": output_rows,
+        "flags": flags,
+        "flagged_count": len({f["row"] for f in flags}),
         "page_count": len(pages_used),
         "row_count": len(output_rows),
     }
+
+
+# ---------- Anomaly Detection ----------
+
+def _is_numeric(v: str) -> bool:
+    """Check if a string represents a number (after stripping commas/spaces)."""
+    v = v.replace(",", "").replace(" ", "").strip()
+    if not v:
+        return False
+    try:
+        float(v)
+        return True
+    except ValueError:
+        return False
+
+
+def _percentile(sorted_vals: list[float], p: float) -> float:
+    """Compute percentile from a sorted list."""
+    if not sorted_vals:
+        return 0.0
+    k = (len(sorted_vals) - 1) * (p / 100)
+    f = math.floor(k)
+    c = math.ceil(k)
+    if f == c:
+        return sorted_vals[int(k)]
+    return sorted_vals[f] * (c - k) + sorted_vals[c] * (k - f)
+
+
+def _profile_column(values: list[str]) -> dict:
+    """Build a statistical profile for a column's values."""
+    if not values:
+        return {"skip": True}
+
+    lengths = sorted(len(v) for v in values)
+    digit_ratios = sorted(
+        sum(c.isdigit() for c in v) / max(len(v), 1) for v in values
+    )
+    numeric_count = sum(1 for v in values if _is_numeric(v))
+    freq = Counter(values)
+    # Common threshold: ≥1% of total values (min 5)
+    common_threshold = max(5, len(values) * 0.01)
+
+    q1_len = _percentile(lengths, 25)
+    q3_len = _percentile(lengths, 75)
+    iqr_len = q3_len - q1_len
+    # Ensure minimum lower bound of 2 chars
+    lower_len = max(q1_len - 1.5 * iqr_len, 1)
+    upper_len = q3_len + 1.5 * iqr_len
+
+    median_dr = _percentile(digit_ratios, 50)
+
+    return {
+        "skip": False,
+        "numeric_ratio": numeric_count / len(values),
+        "is_numeric_col": numeric_count / len(values) > 0.7,
+        "lower_len": lower_len,
+        "upper_len": upper_len,
+        "q1_len": q1_len,
+        "q3_len": q3_len,
+        "digit_ratio_median": median_dr,
+        "freq": freq,
+        "common_threshold": common_threshold,
+    }
+
+
+def _check_cell(value: str, profile: dict) -> str | None:
+    """Check a single cell value against its column profile. Return reason or None."""
+    if profile.get("skip") or not value or value == "-":
+        return None
+
+    freq = profile["freq"]
+    threshold = profile.get("common_threshold", 5)
+    is_common = freq.get(value, 0) >= threshold
+
+    # Common values are exempt from all checks — they appear enough to be intentional
+    if is_common:
+        return None
+
+    # Check 1: numeric column has non-numeric value
+    if profile["is_numeric_col"] and not _is_numeric(value):
+        return "non-numeric in price column"
+
+    # Check 2: unusual length
+    vlen = len(value)
+    lower = profile["lower_len"]
+    upper = profile["upper_len"]
+    if vlen < lower:
+        return f"unusual length ({vlen} char{'s' if vlen != 1 else ''}, expected {int(lower)}-{int(upper)})"
+    if vlen > upper:
+        return f"unusual length ({vlen} chars, expected {int(lower)}-{int(upper)})"
+
+    # Check 3: unusual character composition
+    dr = sum(c.isdigit() for c in value) / max(len(value), 1)
+    if abs(dr - profile["digit_ratio_median"]) > 0.5:
+        return "unusual character pattern"
+
+    return None
+
+
+def _detect_anomalies(columns: list[str], rows: list[list[str]]) -> list[dict]:
+    """Profile each column and flag anomalous cells."""
+    if not rows or not columns:
+        return []
+
+    n_cols = len(columns)
+
+    # Skip metadata columns (Page, Heading) — only profile data columns
+    skip_cols = {"page", "heading", "variant"}
+    profiles = []
+    for ci in range(n_cols):
+        col_lower = columns[ci].lower()
+        if col_lower in skip_cols:
+            profiles.append({"skip": True})
+        else:
+            col_values = [r[ci] for r in rows if ci < len(r) and r[ci] and r[ci] != "-"]
+            profiles.append(_profile_column(col_values))
+
+    flags = []
+    for ri, row in enumerate(rows):
+        for ci in range(min(len(row), n_cols)):
+            reason = _check_cell(row[ci], profiles[ci])
+            if reason:
+                flags.append({"row": ri, "col": ci, "reason": reason})
+
+    return flags
 
 
 @bp.route("/api/uploads/<uid>/extract", methods=["POST"])
