@@ -29,6 +29,10 @@ export async function fetchPageStates(id: string): Promise<PageState[]> {
   return res.json()
 }
 
+export async function resumeUpload(id: string): Promise<void> {
+  await fetch(`/api/uploads/${id}/resume`, { method: 'POST' })
+}
+
 export async function fetchPageMarkdown(id: string, pageNum: number): Promise<Page> {
   const res = await fetch(`/api/uploads/${id}/page/${pageNum}`)
   return res.json()

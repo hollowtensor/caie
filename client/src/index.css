@@ -1,7 +1,7 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
-/* OCR markdown/HTML table styling */
+/* Markdown/HTML table styling */
 .md-content table {
   width: 100%;
   border-collapse: collapse;

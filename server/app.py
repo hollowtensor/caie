@@ -32,7 +32,7 @@ def main():
     args = p.parse_args()
 
     config.SERVER_URL = args.server_url.rstrip("/")
-    print(f"OCR Server: {config.SERVER_URL}  |  Data: {config.DATA_DIR}")
+    print(f"Parse Server: {config.SERVER_URL}  |  Data: {config.DATA_DIR}")
 
     app = create_app()
     app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)

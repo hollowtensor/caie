@@ -9,7 +9,7 @@ from .dspy_cleanup import (
     load_optimized,
 )
 from .export import save_results
-from .ocr_client import ocr_page, render_pdf_pages
+from .parse_client import parse_page as vision_parse, render_pdf_pages
 from .parser import parse_page
 from .schemas import ExtractionResult, PricelistItem
 
@@ -71,20 +71,20 @@ def run_extraction(
     total_pages = len(images)
     progress("rendering", 0, total_pages, 0, f"Rendered {total_pages} pages")
 
-    # Stage 2: OCR + Stage 3: DSPy extraction
+    # Stage 2: Parse + Stage 3: DSPy extraction
     all_items: list[PricelistItem] = []
     errors: list[dict] = []
     pages_processed = 0
 
     for i, image in enumerate(images):
         page_num = i + 1
-        progress("ocr", page_num, total_pages, len(all_items), f"OCR page {page_num}/{total_pages}")
+        progress("parsing", page_num, total_pages, len(all_items), f"Parsing page {page_num}/{total_pages}")
 
         try:
-            markdown = ocr_page(image, server_url)
+            markdown = vision_parse(image, server_url)
         except Exception as e:
-            errors.append({"page": page_num, "stage": "ocr", "error": str(e)})
-            progress("ocr", page_num, total_pages, len(all_items), f"OCR failed page {page_num}: {e}")
+            errors.append({"page": page_num, "stage": "parsing", "error": str(e)})
+            progress("parsing", page_num, total_pages, len(all_items), f"Parse failed page {page_num}: {e}")
             continue
 
         pages_processed += 1

@@ -12,5 +12,5 @@ DB_PATH = os.path.join(DATA_DIR, "uploads.db")
 for d in (DATA_DIR, PDF_DIR, PAGES_DIR, OUTPUT_DIR):
     os.makedirs(d, exist_ok=True)
 
-# Set at startup via CLI args
-SERVER_URL: str = ""
+# Loaded from env (.env via dotenv), overridable via CLI --server-url
+SERVER_URL: str = os.environ.get("LIGHTONOCR_SERVER_URL", "http://localhost:8000/v1")

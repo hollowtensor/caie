@@ -60,6 +60,19 @@ export function PageGrid({ uploadId, activePage, onSelectPage, refreshKey }: Pro
                 hover:border-blue-300`}>
               <img src={`/pages/${uploadId}/${f}`} loading="lazy"
                 className="h-full w-full object-cover" alt={`Page ${num}`} />
+              {st === 'pending' && (
+                <div className="absolute inset-0 bg-white/50" />
+              )}
+              {st === 'done' && (
+                <span className="absolute right-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-green-500 text-[9px] leading-none text-white">
+                  ✓
+                </span>
+              )}
+              {st === 'error' && (
+                <span className="absolute right-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[9px] leading-none text-white">
+                  ✕
+                </span>
+              )}
               <span className="absolute bottom-0.5 right-1 rounded bg-black/50 px-1 py-px text-[9px] text-white">
                 {num}
               </span>

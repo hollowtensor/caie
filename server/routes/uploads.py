@@ -11,7 +11,7 @@ from flask import Blueprint, Response, jsonify, request
 
 from ..config import PAGES_DIR, PDF_DIR, SERVER_URL
 from ..db import db_get, db_list, db_update, get_db
-from ..tasks.ocr import run_ocr_job
+from ..tasks.parse import resume_parse_job, run_parse_job
 
 bp = Blueprint("uploads", __name__)
 
@@ -78,8 +78,21 @@ def upload():
              pdf_path, "queued", "Queued"),
         )
 
-    threading.Thread(target=run_ocr_job, args=(uid, srv), daemon=True).start()
+    threading.Thread(target=run_parse_job, args=(uid, srv), daemon=True).start()
     return jsonify({"id": uid})
+
+
+@bp.route("/api/uploads/<uid>/resume", methods=["POST"])
+def resume(uid: str):
+    u = db_get(uid)
+    if not u:
+        return jsonify({"error": "Not found"}), 404
+    if u["state"] == "done":
+        return jsonify({"error": "Already complete"}), 400
+    srv = request.json.get("server_url", "") if request.is_json else ""
+    srv = srv.strip() or SERVER_URL
+    threading.Thread(target=resume_parse_job, args=(uid, srv), daemon=True).start()
+    return jsonify({"ok": True})
 
 
 @bp.route("/api/uploads/<uid>/status")

@@ -35,7 +35,7 @@ class ExtractionResult(BaseModel):
 
 class JobStatus(BaseModel):
     job_id: str
-    state: str = "pending"  # pending, rendering, ocr, parsing, done, error
+    state: str = "pending"  # pending, rendering, parsing, done, error
     current_page: int = 0
     total_pages: int = 0
     message: str = ""

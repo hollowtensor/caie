@@ -74,7 +74,7 @@ export function UploadForm({ serverUrl, onUploaded }: Props) {
 
         <button type="submit" disabled={uploading}
           className="w-full rounded bg-blue-500 py-2 text-sm font-semibold text-white transition-colors hover:bg-blue-600 disabled:bg-blue-300">
-          {uploading ? 'Uploading...' : 'Upload & OCR'}
+          {uploading ? 'Uploading...' : 'Upload & Parse'}
         </button>
       </form>
 
@@ -84,7 +84,7 @@ export function UploadForm({ serverUrl, onUploaded }: Props) {
       </button>
       {showSettings && (
         <div className="mt-2">
-          <label className="mb-0.5 block text-[11px] font-semibold text-gray-500">OCR Server URL</label>
+          <label className="mb-0.5 block text-[11px] font-semibold text-gray-500">Parse Server URL</label>
           <input type="text" value={srvUrl} onChange={(e) => setSrvUrl(e.target.value)}
             className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm" />
         </div>

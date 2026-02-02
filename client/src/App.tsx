@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { fetchUpload } from './api'
+import { fetchUpload, resumeUpload } from './api'
 import type { Upload } from './types'
 import { useUploads } from './hooks/useUploads'
 import { useSSE } from './hooks/useSSE'
@@ -16,19 +16,20 @@ export default function App() {
   const [activePage, setActivePage] = useState<number | null>(null)
   const [activeUpload, setActiveUpload] = useState<Upload | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
+  const [sseId, setSseId] = useState<string | null>(null)
 
-  // Only listen to SSE for in-progress uploads
-  const needsSSE = activeUpload && !['done', 'error'].includes(activeUpload.state)
-  const status = useSSE(needsSSE ? activeId : null)
+  // SSE only for explicitly started/resumed jobs (not stale uploads)
+  const status = useSSE(sseId)
 
   // Bump refreshKey when SSE updates (so PageGrid re-fetches states)
   useEffect(() => {
     if (status) setRefreshKey((k) => k + 1)
   }, [status?.current_page, status?.state])
 
-  // When SSE reports done/error, refresh upload list and re-fetch the active upload
+  // When SSE reports done/error, stop SSE and refresh
   useEffect(() => {
     if (status?.state === 'done' || status?.state === 'error') {
+      setSseId(null)
       refresh()
       if (activeId) fetchUpload(activeId).then(setActiveUpload)
     }
@@ -37,14 +38,27 @@ export default function App() {
   const handleSelect = useCallback(async (id: string) => {
     setActiveId(id)
     setActivePage(null)
+    setSseId(null)
     const u = await fetchUpload(id)
     setActiveUpload(u)
   }, [])
 
   const handleUploaded = useCallback(async (id: string) => {
     await refresh()
-    handleSelect(id)
-  }, [refresh, handleSelect])
+    setActiveId(id)
+    setActivePage(null)
+    setSseId(id)
+    const u = await fetchUpload(id)
+    setActiveUpload(u)
+  }, [refresh])
+
+  const handleResume = useCallback(async () => {
+    if (!activeId) return
+    await resumeUpload(activeId)
+    setSseId(activeId)
+    const u = await fetchUpload(activeId)
+    setActiveUpload(u)
+  }, [activeId])
 
   const handleDelete = useCallback(() => {
     if (activeId) {
@@ -69,7 +83,7 @@ export default function App() {
     </div>
   ) : (
     <div className="flex flex-1 flex-col gap-3">
-      <ProgressCard status={status} upload={activeUpload} />
+      <ProgressCard status={status} upload={activeUpload} onResume={handleResume} />
       {activePage && activeId && (
         <MarkdownViewer uploadId={activeId} pageNum={activePage} />
       )}
