@@ -7,65 +7,99 @@ Upload a PDF, OCR every page via [LightOnOCR-2](https://huggingface.co/lightonai
 ## Architecture
 
 ```
-Browser (Flask UI)
-    │
-    ├── Upload PDF → save locally, render pages as images
-    │
-    └── OCR (8 concurrent workers) ──► vLLM server (LightOnOCR-2-1B)
-                                           on RunPod GPU
+React (Vite + Tailwind)         Flask API
+  :5173  ──proxy──►  :5001
+    │                   │
+    │    /api/uploads   ├── SQLite (uploads + pages)
+    │    /upload        ├── PDF storage (data/pdfs/)
+    │    /pages/...     ├── Page images (data/pages/)
+    │                   │
+    │                   └── OCR workers (8 concurrent)
+    │                            │
+    │                            ▼
+    │                      vLLM server
+    │                   (LightOnOCR-2-1B)
+    │                     on RunPod GPU
 ```
-
-- **Flask app** — two-panel UI with upload form, page thumbnails, and markdown viewer
-- **SQLite** — persists uploads and per-page OCR results across restarts
-- **vLLM** — serves LightOnOCR-2-1B as an OpenAI-compatible API
-- **Concurrent OCR** — 8 pages in flight at once via ThreadPoolExecutor
 
 ## Project Structure
 
 ```
-app.py                  Flask server (upload, OCR jobs, markdown viewer)
-templates/index.html    Two-panel web UI
-pricelist/
-  ocr_client.py         PDF rendering (pypdfium2) + OCR API client
-  pipeline.py           Full extraction pipeline (OCR + LLM parsing)
-  parser.py             Structured data parser
-  dspy_cleanup.py       DSPy-based table classification
-  llm_client.py         LLM client for structured extraction
-  export.py             JSON/CSV export
-  schemas.py            Pydantic models
-  samples/              Gold-standard samples for DSPy optimization
-  optimized/            Optimized DSPy programs
+server/
+  app.py              Flask app factory + main()
+  config.py           Paths, directories, server URL
+  db.py               SQLite helpers (uploads + pages tables)
+  routes/
+    uploads.py        /api/uploads CRUD, /upload, SSE status
+    pages.py          Page images, page states, markdown
+  tasks/
+    ocr.py            Background OCR job (render + concurrent OCR)
+  pricelist/
+    ocr_client.py     PDF rendering (pypdfium2) + OCR API client
+    pipeline.py       Full extraction pipeline (OCR + LLM parsing)
+    parser.py         Structured data parser
+    dspy_cleanup.py   DSPy-based table classification
+    llm_client.py     LLM client for structured extraction
+    export.py         JSON/CSV export
+    schemas.py        Pydantic models
+    samples/          Gold-standard samples
+    optimized/        Optimized DSPy programs
+client/
+  src/
+    App.tsx           Main app component
+    api.ts            Typed API client
+    types.ts          TypeScript interfaces
+    components/
+      Layout.tsx      Two-panel shell
+      UploadForm.tsx  Upload form (company, year, month, file)
+      UploadList.tsx  Past uploads with badges + delete
+      PageGrid.tsx    Page thumbnails with OCR state
+      ProgressCard.tsx Progress bar + stats
+      MarkdownViewer.tsx Rendered/Raw markdown toggle
+    hooks/
+      useSSE.ts       EventSource hook for live progress
+      useUploads.ts   Upload list fetcher
 runpod/
-  lightonocr_setup.sh   RunPod GPU pod setup script
-  LIGHTONOCR_README.md  Deployment guide for LightOnOCR on RunPod
-  server.py             Custom DeepSeek-OCR-2 server (alternative model)
-  setup.sh              DeepSeek-OCR-2 setup script
+  lightonocr_setup.sh RunPod setup script
+  LIGHTONOCR_README.md Deployment guide
 ```
 
 ## Requirements
 
 - Python 3.11+
+- Node.js 18+
 - A running vLLM server with LightOnOCR-2-1B (see `runpod/LIGHTONOCR_README.md`)
 
 ## Setup
 
+### Server
+
 ```bash
-python -m venv .venv
+uv venv .venv
 source .venv/bin/activate
-pip install flask httpx pypdfium2 pillow pydantic
+uv pip install flask flask-cors httpx pypdfium2 pillow pydantic
 ```
 
-## Usage
+### Client
 
 ```bash
-# Point to your vLLM OCR server
-python app.py --server-url https://<pod-id>-8000.proxy.runpod.net/v1
-
-# Or with a local server
-python app.py --server-url http://localhost:8000/v1
+cd client
+npm install
 ```
 
-Open http://localhost:5001 in your browser.
+## Development
+
+Start both in separate terminals:
+
+```bash
+# Terminal 1 — Flask API
+python -m server.app --server-url https://<pod-id>-8000.proxy.runpod.net/v1
+
+# Terminal 2 — Vite dev server
+cd client && npm run dev
+```
+
+Open http://localhost:5173 in your browser. The Vite dev server proxies API requests to Flask on port 5001.
 
 ### Deploy LightOnOCR on RunPod
 
@@ -86,8 +120,8 @@ vllm serve lightonai/LightOnOCR-2-1B \
 ## How It Works
 
 1. **Upload** — select company, year, month; upload a PDF
-2. **Render** — pages are rendered at 200 DPI (max 1540px) and saved as images
+2. **Render** — pages rendered at 200 DPI (max 1540px), saved as PNG
 3. **OCR** — 8 pages sent concurrently to vLLM as JPEG (quality 90); markdown saved per-page to SQLite
-4. **Browse** — click any page thumbnail to view the OCR'd markdown (rendered or raw)
+4. **Browse** — click any page thumbnail to view OCR'd markdown (rendered or raw)
 
-All uploads persist in SQLite (`data/uploads.db`) so results survive page refreshes and server restarts.
+All uploads persist in SQLite (`data/uploads.db`) across page refreshes and server restarts.
