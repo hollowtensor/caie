@@ -22,7 +22,7 @@ def init_db():
                 company      TEXT NOT NULL DEFAULT 'schneider',
                 year         INTEGER,
                 month        INTEGER,
-                pdf_path     TEXT NOT NULL,
+                pdf_path     TEXT DEFAULT '',
                 state        TEXT NOT NULL DEFAULT 'queued',
                 message      TEXT DEFAULT '',
                 total_pages  INTEGER DEFAULT 0,

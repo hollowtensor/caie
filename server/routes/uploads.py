@@ -49,13 +49,20 @@ def delete_upload(uid: str):
     return jsonify({"ok": True})
 
 
+ALLOWED_EXT = {".pdf", ".png", ".jpg", ".jpeg"}
+
+
 @bp.route("/upload", methods=["POST"])
 def upload():
-    if "pdf" not in request.files:
-        return jsonify({"error": "No PDF file"}), 400
-    f = request.files["pdf"]
-    if not f.filename or not f.filename.lower().endswith(".pdf"):
-        return jsonify({"error": "Must be a PDF"}), 400
+    files = request.files.getlist("file")
+    if not files or not files[0].filename:
+        return jsonify({"error": "No file provided"}), 400
+
+    # Validate extensions
+    for f in files:
+        ext = os.path.splitext(f.filename or "")[1].lower()
+        if ext not in ALLOWED_EXT:
+            return jsonify({"error": f"Unsupported file type: {ext}"}), 400
 
     company = request.form.get("company", "schneider").strip()
     year = request.form.get("year", "").strip()
@@ -63,20 +70,44 @@ def upload():
     srv = request.form.get("server_url", "").strip() or SERVER_URL
 
     uid = uuid.uuid4().hex[:12]
-    pdf_path = os.path.join(PDF_DIR, f"{uid}.pdf")
-    f.save(pdf_path)
-    os.makedirs(os.path.join(PAGES_DIR, uid), exist_ok=True)
+    pages_dir = os.path.join(PAGES_DIR, uid)
+    os.makedirs(pages_dir, exist_ok=True)
+
+    first_ext = os.path.splitext(files[0].filename or "")[1].lower()
+    is_pdf = first_ext == ".pdf"
+
+    if is_pdf:
+        # PDF flow — save PDF, rendering happens in parse job
+        pdf_path = os.path.join(PDF_DIR, f"{uid}.pdf")
+        files[0].save(pdf_path)
+        filename = files[0].filename
+    else:
+        # Image flow — save images directly as page PNGs
+        pdf_path = ""
+        filename = files[0].filename if len(files) == 1 else f"{len(files)} images"
+        from PIL import Image as PILImage
+        for i, f in enumerate(sorted(files, key=lambda f: f.filename or ""), start=1):
+            img = PILImage.open(f.stream).convert("RGB")
+            img.save(os.path.join(pages_dir, f"page_{i:03d}.png"), "PNG")
 
     with get_db() as conn:
         conn.execute(
             "INSERT INTO uploads"
-            " (id, filename, company, year, month, pdf_path, state, message)"
-            " VALUES (?,?,?,?,?,?,?,?)",
-            (uid, f.filename, company,
+            " (id, filename, company, year, month, pdf_path, state, message, total_pages)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
+            (uid, filename, company,
              int(year) if year else None,
              int(month) if month else None,
-             pdf_path, "queued", "Queued"),
+             pdf_path, "queued", "Queued",
+             0 if is_pdf else len(files)),
         )
+        if not is_pdf:
+            for i in range(1, len(files) + 1):
+                conn.execute(
+                    "INSERT OR IGNORE INTO pages (upload_id, page_num, state)"
+                    " VALUES (?,?,?)",
+                    (uid, i, "pending"),
+                )
 
     threading.Thread(target=run_parse_job, args=(uid, srv), daemon=True).start()
     return jsonify({"id": uid})

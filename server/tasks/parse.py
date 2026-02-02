@@ -86,7 +86,7 @@ def parse_page(image: Image.Image, server_url: str, max_tokens: int = 4096) -> s
 
 
 def run_parse_job(uid: str, server_url: str):
-    """Background job: render PDF pages, then parse them concurrently."""
+    """Background job: render PDF pages (or load images), then parse them concurrently."""
     u = db_get(uid)
     if not u:
         return
@@ -95,27 +95,37 @@ def run_parse_job(uid: str, server_url: str):
     pages_dir = os.path.join(PAGES_DIR, uid)
     os.makedirs(pages_dir, exist_ok=True)
 
-    # Step 1: Render pages as images
-    try:
-        db_update(uid, state="rendering", message="Rendering PDF pages...")
-        images = render_pdf_pages(pdf_path)
-        total = len(images)
-        db_update(uid, total_pages=total, message=f"Saving {total} page images...")
-        for i, img in enumerate(images):
-            img.save(os.path.join(pages_dir, f"page_{i + 1:03d}.png"), "PNG")
+    # Step 1: Render pages as images (skip for image uploads)
+    if pdf_path and os.path.exists(pdf_path):
+        try:
+            db_update(uid, state="rendering", message="Rendering PDF pages...")
+            images = render_pdf_pages(pdf_path)
+            total = len(images)
+            db_update(uid, total_pages=total, message=f"Saving {total} page images...")
+            for i, img in enumerate(images):
+                img.save(os.path.join(pages_dir, f"page_{i + 1:03d}.png"), "PNG")
 
-        with get_db() as conn:
-            for i in range(total):
-                conn.execute(
-                    "INSERT OR IGNORE INTO pages (upload_id, page_num, state)"
-                    " VALUES (?,?,?)",
-                    (uid, i + 1, "pending"),
-                )
+            with get_db() as conn:
+                for i in range(total):
+                    conn.execute(
+                        "INSERT OR IGNORE INTO pages (upload_id, page_num, state)"
+                        " VALUES (?,?,?)",
+                        (uid, i + 1, "pending"),
+                    )
 
-        db_update(uid, message=f"Rendered {total} pages")
-    except Exception as e:
-        db_update(uid, state="error", message=f"Render failed: {e}")
-        return
+            db_update(uid, message=f"Rendered {total} pages")
+        except Exception as e:
+            db_update(uid, state="error", message=f"Render failed: {e}")
+            return
+    else:
+        # Image upload — pages already saved, load them
+        page_files = sorted(f for f in os.listdir(pages_dir) if f.endswith(".png"))
+        total = len(page_files)
+        if total == 0:
+            db_update(uid, state="error", message="No page images found")
+            return
+        images = [Image.open(os.path.join(pages_dir, pf)) for pf in page_files]
+        db_update(uid, total_pages=total, message=f"Loaded {total} images")
 
     # Step 2: Parse pages concurrently
     db_update(uid, state="parsing", message=f"Starting parse ({PARSE_WORKERS} workers)...")

@@ -10,24 +10,27 @@ interface Props {
 
 export function UploadForm({ serverUrl, onUploaded }: Props) {
   const fileRef = useRef<HTMLInputElement>(null)
-  const [fileName, setFileName] = useState('')
+  const [fileLabel, setFileLabel] = useState('')
   const [uploading, setUploading] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [srvUrl, setSrvUrl] = useState(serverUrl || 'http://localhost:8000/v1')
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
-    const file = fileRef.current?.files?.[0]
-    if (!file) return alert('Select a PDF')
+    const files = fileRef.current?.files
+    if (!files || files.length === 0) return alert('Select a file')
 
     setUploading(true)
     const fd = new FormData(e.currentTarget)
-    fd.set('pdf', file)
+    fd.delete('file')
+    for (const file of Array.from(files)) {
+      fd.append('file', file)
+    }
     fd.set('server_url', srvUrl)
     try {
       const { id } = await uploadPdf(fd)
       onUploaded(id)
-      setFileName('')
+      setFileLabel('')
       if (fileRef.current) fileRef.current.value = ''
     } catch (err) {
       alert('Upload failed')
@@ -65,11 +68,16 @@ export function UploadForm({ serverUrl, onUploaded }: Props) {
         </div>
 
         <label className="mb-2 flex cursor-pointer items-center justify-center rounded-md border-2 border-dashed border-gray-300 p-3.5 text-sm text-gray-400 transition-colors hover:border-blue-400">
-          <input ref={fileRef} type="file" name="pdf" accept=".pdf" className="hidden"
-            onChange={(e) => setFileName(e.target.files?.[0]?.name || '')} />
-          {fileName
-            ? <span className="font-semibold text-gray-900">{fileName}</span>
-            : 'Drop PDF or click to browse'}
+          <input ref={fileRef} type="file" name="file" accept=".pdf,.png,.jpg,.jpeg" multiple className="hidden"
+            onChange={(e) => {
+              const files = e.target.files
+              if (!files || files.length === 0) setFileLabel('')
+              else if (files.length === 1) setFileLabel(files[0].name)
+              else setFileLabel(`${files.length} files selected`)
+            }} />
+          {fileLabel
+            ? <span className="font-semibold text-gray-900">{fileLabel}</span>
+            : 'Drop PDF or images'}
         </label>
 
         <button type="submit" disabled={uploading}
