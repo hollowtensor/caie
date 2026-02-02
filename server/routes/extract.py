@@ -375,7 +375,7 @@ def _profile_column(values: list[str]) -> dict:
         sum(c.isdigit() for c in v) / max(len(v), 1) for v in values
     )
     numeric_count = sum(1 for v in values if _is_numeric(v))
-    freq = Counter(values)
+    freq = Counter(v.lower().rstrip("*") for v in values)
     # Common threshold: ≥1% of total values (min 5)
     common_threshold = max(5, len(values) * 0.01)
 
@@ -409,7 +409,7 @@ def _check_cell(value: str, profile: dict) -> str | None:
 
     freq = profile["freq"]
     threshold = profile.get("common_threshold", 5)
-    is_common = freq.get(value, 0) >= threshold
+    is_common = freq.get(value.lower().rstrip("*"), 0) >= threshold
 
     # Common values are exempt from all checks — they appear enough to be intentional
     if is_common:
