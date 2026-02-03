@@ -220,12 +220,50 @@ def _get_config(data: dict) -> dict | None:
         cfg = schema["fields"]
         return cfg if isinstance(cfg, dict) else None
     config = {}
-    for key in ("row_anchor", "value_anchor", "extras", "include_page", "include_heading"):
+    for key in ("row_anchor", "value_anchor", "extras", "include_page", "include_heading", "fill_down_value"):
         if key in data:
             config[key] = data[key]
     if not config.get("row_anchor") or not config.get("value_anchor"):
         return None
     return config
+
+
+def _apply_fill_down(tables: list[dict], val_indices: list[int]) -> None:
+    """Fill empty value cells from neighboring rows within each table (for rowspan recovery).
+
+    Does two passes:
+    1. Fill down: empty cells get value from row above
+    2. Fill up: leading empty cells get value from first non-empty row
+    """
+    for t in tables:
+        rows = t.get("rows", [])
+        for vi in val_indices:
+            # Pass 1: Fill down (top to bottom)
+            prev_value = None
+            for row in rows:
+                if vi < len(row):
+                    cell = row[vi]
+                    if cell and cell != "-":
+                        prev_value = cell
+                    elif prev_value:
+                        row[vi] = prev_value
+
+            # Pass 2: Fill up leading empty cells from first non-empty value
+            first_value = None
+            for row in rows:
+                if vi < len(row):
+                    cell = row[vi]
+                    if cell and cell != "-":
+                        first_value = cell
+                        break
+
+            if first_value:
+                for row in rows:
+                    if vi < len(row):
+                        cell = row[vi]
+                        if cell and cell != "-":
+                            break  # Stop at first non-empty
+                        row[vi] = first_value
 
 
 def _extract(uid: str, config: dict) -> dict:
@@ -236,6 +274,7 @@ def _extract(uid: str, config: dict) -> dict:
     extras_list: list[str] = config.get("extras", [])
     include_page = config.get("include_page", False)
     include_heading = config.get("include_heading", False)
+    fill_down_value = config.get("fill_down_value", False)
 
     ra = row_anchor.lower()
     va = value_anchor.lower()
@@ -278,6 +317,10 @@ def _extract(uid: str, config: dict) -> dict:
             if not ref_indices or not val_indices:
                 continue
 
+            # Apply fill-down for value column if enabled (rowspan recovery)
+            if fill_down_value:
+                _apply_fill_down([t], val_indices)
+
             extra_indices: list[int | None] = []
             for ext in extras_list:
                 ext_lower = ext.lower()
@@ -303,7 +346,11 @@ def _extract(uid: str, config: dict) -> dict:
                     ri = _find_nearest_left(vi, ref_indices)
                     if ri is None:
                         continue
-                    reference = data_row[ri] if ri < len(data_row) else "-"
+                    reference = data_row[ri] if ri < len(data_row) else ""
+
+                    # Skip rows where row anchor is empty (header/label rows)
+                    if not reference or reference == "-":
+                        continue
 
                     out: list[str] = []
                     if include_page:
@@ -348,6 +395,12 @@ def _is_numeric(v: str) -> bool:
         return False
 
 
+def _strip_markers(v: str) -> str:
+    """Strip trailing stock/status markers from values for length comparison."""
+    # Common markers: ■ (stock item), * (footnote), etc.
+    return v.rstrip(" ■□*●○◆◇▪▫")
+
+
 def _percentile(sorted_vals: list[float], p: float) -> float:
     if not sorted_vals:
         return 0.0
@@ -363,7 +416,8 @@ def _profile_column(values: list[str]) -> dict:
     if not values:
         return {"skip": True}
 
-    lengths = sorted(len(v) for v in values)
+    # Strip trailing markers for length calculation
+    lengths = sorted(len(_strip_markers(v)) for v in values)
     digit_ratios = sorted(
         sum(c.isdigit() for c in v) / max(len(v), 1) for v in values
     )
@@ -407,7 +461,8 @@ def _check_cell(value: str, profile: dict) -> str | None:
     if profile["is_numeric_col"] and not _is_numeric(value):
         return "non-numeric in price column"
 
-    vlen = len(value)
+    # Strip trailing markers for length comparison
+    vlen = len(_strip_markers(value))
     lower = profile["lower_len"]
     upper = profile["upper_len"]
     if vlen < lower:

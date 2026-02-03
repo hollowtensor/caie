@@ -68,6 +68,13 @@ function ConfigCard({
         )}
         <div>Page: {f.include_page ? 'Yes' : 'No'}</div>
         <div>Heading: {f.include_heading ? 'Yes' : 'No'}</div>
+        {f.fill_down_value && (
+          <div className="col-span-2">
+            <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
+              Fill down enabled
+            </span>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -88,6 +95,7 @@ function NewConfigForm({
   const [extras, setExtras] = useState<string[]>([])
   const [includePage, setIncludePage] = useState(false)
   const [includeHeading, setIncludeHeading] = useState(false)
+  const [fillDownValue, setFillDownValue] = useState(false)
   const [saving, setSaving] = useState(false)
 
   const [scanning, setScanning] = useState(false)
@@ -118,6 +126,7 @@ function NewConfigForm({
         extras,
         include_page: includePage,
         include_heading: includeHeading,
+        fill_down_value: fillDownValue,
       },
     })
     setSaving(false)
@@ -236,7 +245,7 @@ function NewConfigForm({
       )}
 
       {/* Options */}
-      <div className="flex gap-4">
+      <div className="flex flex-wrap gap-4">
         <label className="flex items-center gap-1.5 text-xs text-gray-600">
           <input
             type="checkbox"
@@ -254,6 +263,15 @@ function NewConfigForm({
             className="rounded"
           />
           Include heading
+        </label>
+        <label className="flex items-center gap-1.5 text-xs text-gray-600" title="Fill empty value cells from row above (for tables with rowspans)">
+          <input
+            type="checkbox"
+            checked={fillDownValue}
+            onChange={(e) => setFillDownValue(e.target.checked)}
+            className="rounded"
+          />
+          Fill down value
         </label>
       </div>
 

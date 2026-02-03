@@ -201,7 +201,9 @@ function ExportView({
   onDownload,
   onBack,
   onRefresh,
+  onReExtract,
   extractConfig,
+  reExtracting,
 }: {
   result: ExtractResult
   uploadId: string
@@ -209,7 +211,9 @@ function ExportView({
   onDownload: () => void
   onBack: () => void
   onRefresh: (res: ExtractResult) => void
+  onReExtract: () => void
   extractConfig: ExtractConfig
+  reExtracting: boolean
 }) {
   const [selectedRow, setSelectedRow] = useState<number | null>(null)
   const [zoom, setZoom] = useState(1)
@@ -320,6 +324,17 @@ function ExportView({
             className="rounded-lg border border-gray-200 px-3 py-2 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-50"
           >
             ← Reconfigure
+          </button>
+          <button
+            onClick={onReExtract}
+            disabled={reExtracting}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-medium text-blue-600 transition-colors hover:bg-blue-100 disabled:opacity-50"
+            title="Re-run extraction with current config"
+          >
+            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            {reExtracting ? 'Extracting...' : 'Re-extract'}
           </button>
           <button
             onClick={onDownload}
@@ -534,6 +549,7 @@ export function ExtractPage() {
 
   const [loading, setLoading] = useState(false)
   const [downloading, setDownloading] = useState(false)
+  const [reExtracting, setReExtracting] = useState(false)
 
   useEffect(() => {
     if (uploadId) fetchUpload(uploadId).then(setUpload)
@@ -600,6 +616,18 @@ export function ExtractPage() {
     setDownloading(false)
   }
 
+  const handleReExtract = async () => {
+    if (!uploadId) return
+    setReExtracting(true)
+    const extractConfig: ExtractConfig = {
+      ...config,
+      extras: extrasText.split(',').map((s) => s.trim()).filter(Boolean),
+    }
+    const res = await extractData(uploadId, extractConfig)
+    setResult(res)
+    setReExtracting(false)
+  }
+
   if (!upload || (loading && !result)) {
     return <div className="flex h-screen items-center justify-center text-sm text-gray-400">
       {loading ? 'Extracting...' : 'Loading...'}
@@ -629,6 +657,8 @@ export function ExtractPage() {
           onDownload={handleDownload}
           onBack={() => setResult(null)}
           onRefresh={setResult}
+          onReExtract={handleReExtract}
+          reExtracting={reExtracting}
           extractConfig={{
             ...config,
             extras: extrasText.split(',').map((s) => s.trim()).filter(Boolean),

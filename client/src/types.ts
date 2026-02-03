@@ -63,6 +63,7 @@ export interface ExtractConfig {
   extras: string[]
   include_page: boolean
   include_heading: boolean
+  fill_down_value?: boolean
 }
 
 export interface Schema {
