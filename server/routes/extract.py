@@ -556,19 +556,23 @@ def run_auto_extract(uid: str):
     if not u:
         return
 
+    total_pages = u.get("total_pages", 0)
     company = u.get("company", "")
     schema = db_get_default_schema(company)
     if not schema:
-        db_update(uid, extract_state="no_config")
+        db_update(uid, extract_state="no_config",
+                  message=f"Done — {total_pages} pages parsed (no extraction config)")
         return
 
     cfg = schema["fields"]
     if not isinstance(cfg, dict) or not cfg.get("row_anchor") or not cfg.get("value_anchor"):
-        db_update(uid, extract_state="no_config")
+        db_update(uid, extract_state="no_config",
+                  message=f"Done — {total_pages} pages parsed (no extraction config)")
         return
 
     try:
-        db_update(uid, extract_state="running")
+        db_update(uid, extract_state="running",
+                  message=f"Extracting data...")
         result = _extract(uid, cfg)
 
         csv_filename = f"{uid}_extract.csv"
@@ -578,9 +582,12 @@ def run_auto_extract(uid: str):
         writer.writerows(result["rows"])
         storage.upload_csv(csv_filename, buf.getvalue().encode("utf-8"))
 
-        db_update(uid, extract_state="done", extract_csv=csv_filename)
+        row_count = result.get("row_count", len(result["rows"]))
+        db_update(uid, extract_state="done", extract_csv=csv_filename,
+                  message=f"Done — {total_pages} pages, {row_count} rows extracted")
     except Exception:
-        db_update(uid, extract_state="error")
+        db_update(uid, extract_state="error",
+                  message=f"Done — {total_pages} pages parsed (extraction failed)")
 
 
 @bp.route("/api/uploads/<uid>/extract/download")
