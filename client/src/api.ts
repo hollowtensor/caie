@@ -12,6 +12,7 @@ import type {
   MeResponse,
   WorkspaceInfo,
   WorkspaceDetails,
+  ComparisonResult,
 } from './types'
 
 // Token storage keys
@@ -435,4 +436,64 @@ export function getSSEUrl(uploadId: string): string {
   return token
     ? `/api/uploads/${uploadId}/status?token=${encodeURIComponent(token)}`
     : `/api/uploads/${uploadId}/status`
+}
+
+// ---------- Comparison API ----------
+
+export async function fetchComparableUploads(uploadId: string): Promise<Upload[]> {
+  const res = await authFetch(`/api/uploads/${uploadId}/comparable`)
+  if (!res.ok) {
+    const err = await res.json()
+    throw new Error(err.error || 'Failed to fetch comparable uploads')
+  }
+  return res.json()
+}
+
+export async function compareExtractions(
+  baseId: string,
+  targetId: string,
+  config?: ExtractConfig
+): Promise<ComparisonResult> {
+  const body: Record<string, unknown> = {
+    base_upload_id: baseId,
+    target_upload_id: targetId,
+  }
+  if (config) {
+    body.config = config
+  }
+  const res = await authFetch('/api/compare', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const err = await res.json()
+    throw new Error(err.error || 'Comparison failed')
+  }
+  return res.json()
+}
+
+export async function downloadComparisonCsv(
+  baseId: string,
+  targetId: string,
+  config?: ExtractConfig
+): Promise<string> {
+  const body: Record<string, unknown> = {
+    base_upload_id: baseId,
+    target_upload_id: targetId,
+  }
+  if (config) {
+    body.config = config
+  }
+  const res = await authFetch('/api/compare/csv', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const err = await res.json()
+    throw new Error(err.error || 'CSV download failed')
+  }
+  const blob = await res.blob()
+  return URL.createObjectURL(blob)
 }

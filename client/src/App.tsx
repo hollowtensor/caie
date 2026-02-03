@@ -13,6 +13,7 @@ import { ProgressCard } from './components/ProgressCard'
 import { MarkdownViewer } from './components/MarkdownViewer'
 import { DocumentInfo } from './components/DocumentInfo'
 import { ExtractPage } from './components/ExtractPage'
+import { ComparisonPage } from './components/ComparisonPage'
 import { SettingsPage } from './components/SettingsPage'
 import { LoginPage } from './pages/LoginPage'
 import { RegisterPage } from './pages/RegisterPage'
@@ -163,6 +164,14 @@ export default function App() {
         element={
           <ProtectedRoute>
             <ExtractPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/compare"
+        element={
+          <ProtectedRoute>
+            <ComparisonPage />
           </ProtectedRoute>
         }
       />

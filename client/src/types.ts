@@ -146,3 +146,47 @@ export interface MeResponse {
   user: User
   workspaces: WorkspaceInfo[]
 }
+
+// Comparison types
+export interface ComparisonSummary {
+  total_base: number
+  total_target: number
+  matched: number
+  added: number
+  removed: number
+  price_increased: number
+  price_decreased: number
+  price_unavailable: number
+  price_available: number
+  unchanged: number
+}
+
+export interface ComparisonUpload {
+  id: string
+  filename: string
+  company: string
+  year: number | null
+  month: number | null
+}
+
+export interface ComparisonConfig {
+  row_anchor: string
+  value_anchor: string
+}
+
+export interface ComparisonDebug {
+  base_sample_refs: string[]
+  target_sample_refs: string[]
+  row_anchor: string
+  value_anchor: string
+}
+
+export interface ComparisonResult {
+  base_upload: ComparisonUpload
+  target_upload: ComparisonUpload
+  config: ComparisonConfig
+  debug: ComparisonDebug
+  summary: ComparisonSummary
+  columns: string[]
+  rows: string[][] // [status, ref, desc, base_price, target_price, change, pct_change]
+}

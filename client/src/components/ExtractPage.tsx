@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useParams, useSearchParams, Link } from 'react-router-dom'
+import { useParams, useSearchParams, Link, useNavigate } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeRaw from 'rehype-raw'
@@ -12,6 +12,7 @@ import {
   fetchPageMarkdown,
   validateTable,
   applyCorrection,
+  fetchComparableUploads,
 } from '../api'
 import type { Upload, Schema, ExtractConfig, ExtractResult } from '../types'
 import { DataTable } from './DataTable'
@@ -204,6 +205,7 @@ function ExportView({
   onReExtract,
   extractConfig,
   reExtracting,
+  onCompare,
 }: {
   result: ExtractResult
   uploadId: string
@@ -214,6 +216,7 @@ function ExportView({
   onReExtract: () => void
   extractConfig: ExtractConfig
   reExtracting: boolean
+  onCompare: () => void
 }) {
   const [selectedRow, setSelectedRow] = useState<number | null>(null)
   const [zoom, setZoom] = useState(1)
@@ -324,6 +327,16 @@ function ExportView({
             className="rounded-lg border border-gray-200 px-3 py-2 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-50"
           >
             ← Reconfigure
+          </button>
+          <button
+            onClick={onCompare}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-purple-200 bg-purple-50 px-3 py-2 text-xs font-medium text-purple-600 transition-colors hover:bg-purple-100"
+            title="Compare with another pricelist"
+          >
+            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+            </svg>
+            Compare
           </button>
           <button
             onClick={onReExtract}
@@ -532,6 +545,7 @@ function ExportView({
 export function ExtractPage() {
   const { uploadId } = useParams<{ uploadId: string }>()
   const [searchParams] = useSearchParams()
+  const navigate = useNavigate()
   const isCustom = searchParams.get('custom') === '1'
   const [upload, setUpload] = useState<Upload | null>(null)
   const [schemas, setSchemas] = useState<Schema[]>([])
@@ -550,6 +564,12 @@ export function ExtractPage() {
   const [loading, setLoading] = useState(false)
   const [downloading, setDownloading] = useState(false)
   const [reExtracting, setReExtracting] = useState(false)
+
+  // Compare modal state
+  const [showCompareModal, setShowCompareModal] = useState(false)
+  const [comparableUploads, setComparableUploads] = useState<Upload[]>([])
+  const [loadingComparable, setLoadingComparable] = useState(false)
+  const [selectedCompareId, setSelectedCompareId] = useState<string>('')
 
   useEffect(() => {
     if (uploadId) fetchUpload(uploadId).then(setUpload)
@@ -628,6 +648,28 @@ export function ExtractPage() {
     setReExtracting(false)
   }
 
+  const handleOpenCompare = async () => {
+    if (!uploadId) return
+    setShowCompareModal(true)
+    setLoadingComparable(true)
+    try {
+      const uploads = await fetchComparableUploads(uploadId)
+      setComparableUploads(uploads)
+      if (uploads.length > 0) {
+        setSelectedCompareId(uploads[0].id)
+      }
+    } catch (e) {
+      console.error('Failed to load comparable uploads:', e)
+    } finally {
+      setLoadingComparable(false)
+    }
+  }
+
+  const handleStartComparison = () => {
+    if (!uploadId || !selectedCompareId) return
+    navigate(`/compare?base=${uploadId}&target=${selectedCompareId}`)
+  }
+
   if (!upload || (loading && !result)) {
     return <div className="flex h-screen items-center justify-center text-sm text-gray-400">
       {loading ? 'Extracting...' : 'Loading...'}
@@ -663,6 +705,7 @@ export function ExtractPage() {
             ...config,
             extras: extrasText.split(',').map((s) => s.trim()).filter(Boolean),
           }}
+          onCompare={handleOpenCompare}
         />
       ) : (
         <div className="space-y-5">
@@ -758,6 +801,98 @@ export function ExtractPage() {
             >
               {loading ? 'Extracting...' : 'Extract'}
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Compare Modal */}
+      {showCompareModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="mx-4 w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-lg font-bold text-gray-900">Compare Pricelists</h2>
+              <button
+                onClick={() => setShowCompareModal(false)}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {loadingComparable ? (
+              <div className="py-8 text-center text-sm text-gray-400">
+                Loading comparable documents...
+              </div>
+            ) : comparableUploads.length === 0 ? (
+              <div className="py-8 text-center">
+                <p className="text-sm text-gray-500">No comparable documents found.</p>
+                <p className="mt-1 text-xs text-gray-400">
+                  Upload another pricelist from the same company to compare.
+                </p>
+              </div>
+            ) : (
+              <>
+                <div className="mb-4">
+                  <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-gray-400">
+                    Select document to compare with
+                  </label>
+                  <select
+                    value={selectedCompareId}
+                    onChange={(e) => setSelectedCompareId(e.target.value)}
+                    className="w-full rounded-lg border border-gray-200 px-3 py-2.5 text-sm focus:border-purple-400 focus:outline-none"
+                  >
+                    {comparableUploads.map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.filename}
+                        {u.year && u.month ? ` (${u.month}/${u.year})` : u.year ? ` (${u.year})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="rounded-lg bg-gray-50 p-3">
+                  <div className="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-2">
+                    Comparison will show
+                  </div>
+                  <ul className="space-y-1 text-xs text-gray-600">
+                    <li className="flex items-center gap-2">
+                      <span className="inline-block w-2 h-2 rounded-full bg-green-500"></span>
+                      New items in target
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <span className="inline-block w-2 h-2 rounded-full bg-red-500"></span>
+                      Removed items from base
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <span className="inline-block w-2 h-2 rounded-full bg-amber-500"></span>
+                      Price increases
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <span className="inline-block w-2 h-2 rounded-full bg-blue-500"></span>
+                      Price decreases
+                    </li>
+                  </ul>
+                </div>
+
+                <div className="mt-4 flex gap-2">
+                  <button
+                    onClick={() => setShowCompareModal(false)}
+                    className="flex-1 rounded-lg border border-gray-200 px-4 py-2.5 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleStartComparison}
+                    disabled={!selectedCompareId}
+                    className="flex-1 rounded-lg bg-purple-600 px-4 py-2.5 text-xs font-semibold text-white transition-colors hover:bg-purple-700 disabled:opacity-50"
+                  >
+                    Start Comparison
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
