@@ -516,6 +516,13 @@ def extract_data(uid: str):
         return jsonify({"error": "Provide valid config or schema_id"}), 400
 
     result = _extract(uid, config)
+
+    # Update the upload record with extraction results
+    total_pages = u.get("total_pages", 0)
+    row_count = result.get("row_count", len(result["rows"]))
+    db_update(uid, extract_state="done",
+              message=f"Done — {total_pages} pages, {row_count} rows extracted")
+
     return jsonify(result)
 
 
