@@ -20,7 +20,8 @@ export function ProgressCard({ status, upload, uploadId, onResume }: Props) {
   // Extraction state from SSE or upload object
   const extractState = ('extract_state' in s ? s.extract_state : null) as string | null
 
-  const title = isDone ? 'Parsing Complete'
+  const title = isDone
+    ? (extractState === 'done' ? 'Ready' : extractState === 'running' ? 'Extracting...' : 'Parsing Complete')
     : isError ? 'Error'
     : s.state === 'rendering' ? 'Rendering pages...'
     : isStale ? 'Interrupted'
