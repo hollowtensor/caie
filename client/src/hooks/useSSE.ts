@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { StatusUpdate } from '../types'
+import { getSSEUrl } from '../api'
 
 export function useSSE(uploadId: string | null) {
   const [status, setStatus] = useState<StatusUpdate | null>(null)
@@ -13,7 +14,7 @@ export function useSSE(uploadId: string | null) {
     setStatus(null)
     if (!uploadId) return
 
-    const src = new EventSource(`/api/uploads/${uploadId}/status`)
+    const src = new EventSource(getSSEUrl(uploadId))
     srcRef.current = src
 
     src.onmessage = (e) => {

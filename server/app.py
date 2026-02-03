@@ -2,44 +2,84 @@ from __future__ import annotations
 
 import argparse
 import os
+from datetime import timedelta
 
 from dotenv import load_dotenv
 from flask import Flask
 from flask_cors import CORS
 
-load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
-from . import config
-from .db import init_db
-from .routes import register_routes
+import config
+from extensions import db, migrate, jwt
+
+
+def create_app() -> Flask:
+    app = Flask(__name__)
+
+    # Database
+    app.config["SQLALCHEMY_DATABASE_URI"] = config.DATABASE_URL
+    app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
+    # JWT
+    app.config["JWT_SECRET_KEY"] = config.JWT_SECRET_KEY
+    app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(
+        seconds=config.JWT_ACCESS_TOKEN_EXPIRES
+    )
+    app.config["JWT_REFRESH_TOKEN_EXPIRES"] = timedelta(
+        seconds=config.JWT_REFRESH_TOKEN_EXPIRES
+    )
+
+    # Init extensions
+    db.init_app(app)
+    migrations_dir = os.path.join(os.path.dirname(__file__), "migrations")
+    migrate.init_app(app, db, directory=migrations_dir)
+    jwt.init_app(app)
+
+    # Configure JWT token blacklisting with Redis
+    @jwt.token_in_blocklist_loader
+    def check_if_token_revoked(jwt_header, jwt_payload):
+        from routes.auth import get_redis
+        jti = jwt_payload["jti"]
+        token_in_redis = get_redis().get(f"blocklist:{jti}")
+        return token_in_redis is not None
+
+    CORS(app)
+
+    # Import models so Alembic sees them
+    import models  # noqa: F401
+
+    from routes import register_routes
+    register_routes(app)
+
+    with app.app_context():
+        _auto_extract_pending()
+
+    return app
 
 
 def _auto_extract_pending():
     """Auto-extract uploads that are parsed but have no extraction yet."""
-    from .db import get_db
-    from .routes.extract import run_auto_extract
+    from sqlalchemy.exc import ProgrammingError, OperationalError
+    from models import Upload
+    from routes.extract import run_auto_extract
 
-    conn = get_db()
-    rows = conn.execute(
-        "SELECT id FROM uploads WHERE state='done' AND extract_state IS NULL"
-    ).fetchall()
-    conn.close()
+    try:
+        rows = Upload.query.filter(
+            Upload.state == "done",
+            Upload.extract_state.is_(None),
+        ).all()
+    except (ProgrammingError, OperationalError):
+        # Tables don't exist yet (need to run migrations)
+        print("Warning: Database tables not found. Run 'flask db upgrade' to create them.")
+        return
 
     if not rows:
         return
 
     print(f"Auto-extracting {len(rows)} previously parsed upload(s)...")
-    for r in rows:
-        run_auto_extract(r["id"])
-
-
-def create_app() -> Flask:
-    app = Flask(__name__)
-    CORS(app)
-    init_db()
-    register_routes(app)
-    _auto_extract_pending()
-    return app
+    for u in rows:
+        run_auto_extract(u.id)
 
 
 def main():

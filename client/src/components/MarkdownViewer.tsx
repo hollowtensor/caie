@@ -55,7 +55,8 @@ export function MarkdownViewer({ uploadId, pageNum }: Props) {
         <h3 className="text-sm font-semibold">Page {pageNum}</h3>
         <div className="flex items-center gap-2">
           <div className="flex gap-1">
-            {(['rendered', 'split', 'raw', 'tables'] as const).map((m) => (
+            {/* 'raw' tab hidden for now */}
+            {(['rendered', 'split', 'tables'] as const).map((m) => (
               <button key={m} onClick={() => setMode(m)}
                 className={`rounded px-3 py-1 text-[11px] font-medium transition-colors
                   ${mode === m ? 'bg-blue-500 text-white' : 'border border-gray-200 bg-white text-gray-600 hover:bg-gray-50'}`}>
@@ -63,12 +64,14 @@ export function MarkdownViewer({ uploadId, pageNum }: Props) {
               </button>
             ))}
           </div>
+          {/* Download button hidden for now
           <button
             onClick={() => downloadText(page.markdown || '', `page_${pageNum}.md`)}
             className="rounded border border-gray-200 bg-white px-2.5 py-1 text-[11px] font-medium text-gray-600 transition-colors hover:bg-gray-50"
             title="Download page markdown">
             Download
           </button>
+          */}
         </div>
       </div>
       {mode === 'tables' ? (

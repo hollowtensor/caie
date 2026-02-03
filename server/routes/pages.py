@@ -3,17 +3,18 @@ from __future__ import annotations
 import base64
 import csv
 import logging
-import os
 import re
 from io import BytesIO, StringIO
 
 import httpx
-from flask import Blueprint, Response, jsonify, request, send_from_directory
+from flask import Blueprint, Response, g, jsonify, request
 from PIL import Image
 
-from ..config import LLM_MODEL, LLM_SERVER_URL, PAGES_DIR, VLM_MODEL, VLM_SERVER_URL
-from ..db import db_get, db_get_page, db_page_states, get_db
-from ..utils.tables import extract_tables
+from auth import workspace_required
+from config import LLM_MODEL, LLM_SERVER_URL, VLM_MODEL, VLM_SERVER_URL
+from db import db_get, db_get_page, db_get_parsed_pages, db_page_states, db_update_page
+import storage
+from utils.tables import extract_tables
 
 log = logging.getLogger(__name__)
 
@@ -22,43 +23,66 @@ bp = Blueprint("pages", __name__)
 
 @bp.route("/pages/<uid>/<filename>")
 def serve_page(uid: str, filename: str):
-    return send_from_directory(os.path.join(PAGES_DIR, uid), filename)
-
-
-@bp.route("/api/uploads/<uid>/pages")
-def list_pages(uid: str):
-    d = os.path.join(PAGES_DIR, uid)
-    if not os.path.isdir(d):
-        return jsonify([])
-    return jsonify(sorted(f for f in os.listdir(d) if f.endswith(".png")))
-
-
-@bp.route("/api/uploads/<uid>/page-states")
-def page_states(uid: str):
-    return jsonify(db_page_states(uid))
-
-
-@bp.route("/api/uploads/<uid>/page/<int:page_num>")
-def page_markdown(uid: str, page_num: int):
-    p = db_get_page(uid, page_num)
-    if not p:
-        return jsonify({"error": "Not found"}), 404
-    return jsonify(p)
-
-
-@bp.route("/api/uploads/<uid>/markdown")
-def combined_markdown(uid: str):
+    """Serve page image from Minio. No auth required - UUID provides security."""
+    # Verify upload exists (no workspace check - images are public by UUID)
     u = db_get(uid)
     if not u:
         return jsonify({"error": "Not found"}), 404
 
-    conn = get_db()
-    rows = conn.execute(
-        "SELECT page_num, markdown FROM pages"
-        " WHERE upload_id=? AND state='done' ORDER BY page_num",
-        (uid,),
-    ).fetchall()
-    conn.close()
+    match = re.match(r"page_(\d+)\.png", filename)
+    if not match:
+        return jsonify({"error": "Invalid filename"}), 400
+
+    page_num = int(match.group(1))
+    try:
+        data = storage.get_page_image(uid, page_num)
+        return Response(data, mimetype="image/png")
+    except Exception:
+        return jsonify({"error": "Page not found"}), 404
+
+
+@bp.route("/api/uploads/<uid>/pages")
+@workspace_required
+def list_pages(uid: str):
+    """List all page image filenames for an upload."""
+    u = db_get(uid)
+    if not u or u.get("workspace_id") != g.workspace.id:
+        return jsonify({"error": "Not found"}), 404
+
+    files = storage.list_page_images(uid)
+    return jsonify(files)
+
+
+@bp.route("/api/uploads/<uid>/page-states")
+@workspace_required
+def page_states(uid: str):
+    u = db_get(uid)
+    if not u or u.get("workspace_id") != g.workspace.id:
+        return jsonify({"error": "Not found"}), 404
+    return jsonify(db_page_states(uid))
+
+
+@bp.route("/api/uploads/<uid>/page/<int:page_num>")
+@workspace_required
+def page_markdown(uid: str, page_num: int):
+    u = db_get(uid)
+    if not u or u.get("workspace_id") != g.workspace.id:
+        return jsonify({"error": "Not found"}), 404
+
+    p = db_get_page(uid, page_num)
+    if not p:
+        return jsonify({"error": "Page not found"}), 404
+    return jsonify(p)
+
+
+@bp.route("/api/uploads/<uid>/markdown")
+@workspace_required
+def combined_markdown(uid: str):
+    u = db_get(uid)
+    if not u or u.get("workspace_id") != g.workspace.id:
+        return jsonify({"error": "Not found"}), 404
+
+    rows = db_get_parsed_pages(uid)
 
     parts = []
     for r in rows:
@@ -77,7 +101,7 @@ def _estimate_table_regions(markdown: str) -> list[dict]:
     """Estimate vertical positions of tables on a page from markdown structure."""
     parts = re.split(r"(<table.*?</table>)", markdown, flags=re.DOTALL | re.IGNORECASE)
 
-    segments: list[tuple] = []  # ('text', weight) or ('table', weight, index)
+    segments: list[tuple] = []
     table_idx = 0
 
     for part in parts:
@@ -110,7 +134,12 @@ def _estimate_table_regions(markdown: str) -> list[dict]:
 
 
 @bp.route("/api/uploads/<uid>/page/<int:page_num>/table-regions")
+@workspace_required
 def table_regions(uid: str, page_num: int):
+    u = db_get(uid)
+    if not u or u.get("workspace_id") != g.workspace.id:
+        return jsonify({"error": "Not found"}), 404
+
     p = db_get_page(uid, page_num)
     if not p:
         return jsonify([])
@@ -118,7 +147,12 @@ def table_regions(uid: str, page_num: int):
 
 
 @bp.route("/api/uploads/<uid>/page/<int:page_num>/tables")
+@workspace_required
 def page_tables(uid: str, page_num: int):
+    u = db_get(uid)
+    if not u or u.get("workspace_id") != g.workspace.id:
+        return jsonify({"error": "Not found"}), 404
+
     p = db_get_page(uid, page_num)
     if not p:
         return jsonify({"error": "Not found"}), 404
@@ -135,7 +169,12 @@ def page_tables(uid: str, page_num: int):
 
 
 @bp.route("/api/uploads/<uid>/page/<int:page_num>/tables/csv")
+@workspace_required
 def page_table_csv(uid: str, page_num: int):
+    u = db_get(uid)
+    if not u or u.get("workspace_id") != g.workspace.id:
+        return jsonify({"error": "Not found"}), 404
+
     p = db_get_page(uid, page_num)
     if not p:
         return jsonify({"error": "Not found"}), 404
@@ -170,9 +209,9 @@ def _get_table_blocks(markdown: str) -> list[tuple[int, int, str]]:
     )]
 
 
-def _image_to_data_uri(path: str) -> str:
-    """Load a PNG, convert to JPEG base64 data URI."""
-    img = Image.open(path).convert("RGB")
+def _image_bytes_to_data_uri(image_bytes: bytes) -> str:
+    """Convert PNG bytes to JPEG base64 data URI."""
+    img = Image.open(BytesIO(image_bytes)).convert("RGB")
     buf = BytesIO()
     img.save(buf, format="JPEG", quality=90)
     b64 = base64.b64encode(buf.getvalue()).decode()
@@ -188,9 +227,10 @@ def _find_heading_before_table(markdown: str, table_start: int) -> str:
     return ""
 
 
-def _call_vlm(image_path: str, heading: str) -> str:
+def _call_vlm(uid: str, page_num: int, heading: str) -> str:
     """Send page image to VLM and ask it to OCR a specific table from scratch."""
-    image_uri = _image_to_data_uri(image_path)
+    image_bytes = storage.get_page_image(uid, page_num)
+    image_uri = _image_bytes_to_data_uri(image_bytes)
 
     table_hint = f'The table is under the heading/section: "{heading}"' if heading else "Extract the main table"
 
@@ -235,7 +275,6 @@ def _call_vlm(image_path: str, heading: str) -> str:
     resp.raise_for_status()
     content = resp.json()["choices"][0]["message"]["content"]
 
-    # Extract <table>...</table> from response
     m = re.search(r"<table[\s\S]*?</table>", content, re.IGNORECASE)
     if m:
         return m.group()
@@ -249,7 +288,7 @@ def _analyze_table(table_html: str) -> str:
     class TableAnalyzer(HTMLParser):
         def __init__(self):
             super().__init__()
-            self.rows: list[list[dict]] = []  # each row = list of cells
+            self.rows: list[list[dict]] = []
             self.current_row: list[dict] | None = None
             self.current_cell: dict | None = None
             self.in_thead = False
@@ -298,19 +337,16 @@ def _analyze_table(table_html: str) -> str:
 
     lines = []
 
-    # Header analysis
     header_cols = 0
     for i, row in enumerate(analyzer.thead_rows):
         cols = sum(c["colspan"] for c in row)
         lines.append(f"Header row {i}: {cols} columns — [{', '.join(repr(c['text']) for c in row)}]")
         header_cols = max(header_cols, cols)
 
-    # Body analysis — track active rowspans
-    active_rowspans: list[int] = []  # remaining rowspan count per column slot
+    active_rowspans: list[int] = []
     issues = []
 
     for i, row in enumerate(analyzer.tbody_rows):
-        # Count columns from active rowspans carrying over
         inherited = sum(1 for rs in active_rowspans if rs > 0)
         explicit = sum(c["colspan"] for c in row)
         total = inherited + explicit
@@ -321,7 +357,6 @@ def _analyze_table(table_html: str) -> str:
         if total != header_cols and header_cols > 0:
             issues.append(f"Row {i}: has {total} columns but header expects {header_cols}")
 
-        # Update rowspans: decrement existing, add new
         new_spans = [0] * max(header_cols, total)
         slot = 0
         rs_idx = 0
@@ -397,10 +432,15 @@ def _call_llm(page_markdown: str, table_html: str, heading: str) -> str:
 
 
 @bp.route("/api/uploads/<uid>/page/<int:page_num>/validate-table", methods=["POST"])
+@workspace_required
 def validate_table(uid: str, page_num: int):
+    u = db_get(uid)
+    if not u or u.get("workspace_id") != g.workspace.id:
+        return jsonify({"error": "Not found"}), 404
+
     body = request.get_json(force=True) or {}
     table_index = body.get("table_index", 0)
-    method = body.get("method", "vlm")  # "vlm" or "llm"
+    method = body.get("method", "vlm")
 
     p = db_get_page(uid, page_num)
     if not p:
@@ -418,10 +458,9 @@ def validate_table(uid: str, page_num: int):
         if method == "llm":
             corrected_html = _call_llm(md, original_html, heading)
         else:
-            image_path = os.path.join(PAGES_DIR, uid, f"page_{page_num:03d}.png")
-            if not os.path.exists(image_path):
+            if not storage.page_image_exists(uid, page_num):
                 return jsonify({"error": "Page image not found"}), 404
-            corrected_html = _call_vlm(image_path, heading)
+            corrected_html = _call_vlm(uid, page_num, heading)
     except Exception as e:
         log.exception("%s call failed", method.upper())
         return jsonify({"error": f"{method.upper()} error: {e}"}), 502
@@ -433,7 +472,12 @@ def validate_table(uid: str, page_num: int):
 
 
 @bp.route("/api/uploads/<uid>/page/<int:page_num>/apply-correction", methods=["POST"])
+@workspace_required
 def apply_correction(uid: str, page_num: int):
+    u = db_get(uid)
+    if not u or u.get("workspace_id") != g.workspace.id:
+        return jsonify({"error": "Not found"}), 404
+
     body = request.get_json(force=True) or {}
     table_index = body.get("table_index")
     corrected_table = body.get("corrected_table")
@@ -450,19 +494,12 @@ def apply_correction(uid: str, page_num: int):
     if table_index < 0 or table_index >= len(blocks):
         return jsonify({"error": "Table index out of range"}), 404
 
-    # Replace the specific table in the markdown
     start, end, _ = blocks[table_index]
     new_md = md[:start] + corrected_table + md[end:]
 
-    # Update DB
-    with get_db() as conn:
-        conn.execute(
-            "UPDATE pages SET markdown=? WHERE upload_id=? AND page_num=?",
-            (new_md, uid, page_num),
-        )
+    db_update_page(uid, page_num, markdown=new_md)
 
-    # Re-run auto-extract
-    from .extract import run_auto_extract
+    from routes.extract import run_auto_extract
     run_auto_extract(uid)
 
     return jsonify({"ok": True})

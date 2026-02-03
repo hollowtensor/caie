@@ -1,0 +1,83 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: caie
+      POSTGRES_PASSWORD: caie_dev
+      POSTGRES_DB: caie
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U caie"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "5001:5001"
+    environment:
+      FLASK_APP: app
+      DATABASE_URL: postgresql://caie:caie_dev@postgres:5432/caie
+      REDIS_URL: redis://redis:6379/0
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_SECURE: "false"
+      MINIO_BUCKET_PDFS: caie-pdfs
+      MINIO_BUCKET_PAGES: caie-pages
+      MINIO_BUCKET_OUTPUT: caie-output
+      JWT_SECRET_KEY: "${JWT_SECRET_KEY:-change-me-in-production}"
+      JWT_ACCESS_TOKEN_EXPIRES: "${JWT_ACCESS_TOKEN_EXPIRES:-900}"
+      JWT_REFRESH_TOKEN_EXPIRES: "${JWT_REFRESH_TOKEN_EXPIRES:-2592000}"
+      LIGHTONOCR_SERVER_URL: "${LIGHTONOCR_SERVER_URL:-http://localhost:8000/v1}"
+      VLM_SERVER_URL: "${VLM_SERVER_URL:-http://localhost:1234/v1}"
+      VLM_MODEL: "${VLM_MODEL:-qwen/qwen3-vl-8b}"
+      LLM_SERVER_URL: "${LLM_SERVER_URL:-http://localhost:1234/v1}"
+      LLM_MODEL: "${LLM_MODEL:-gpt-oss-20b}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    volumes:
+      # Dev: mount server code for hot reload (remove in production)
+      - .:/app/server:ro
+
+volumes:
+  pgdata:
+  miniodata:

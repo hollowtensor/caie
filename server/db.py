@@ -1,187 +1,283 @@
 from __future__ import annotations
 
-import json
-import sqlite3
-import uuid
-
-from .config import DB_PATH
-
-
-def get_db() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+from extensions import db
+from models import Upload, Page, Schema as SchemaModel
 
 
 def init_db():
-    with get_db() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS uploads (
-                id           TEXT PRIMARY KEY,
-                filename     TEXT NOT NULL,
-                company      TEXT NOT NULL DEFAULT 'schneider',
-                year         INTEGER,
-                month        INTEGER,
-                pdf_path     TEXT DEFAULT '',
-                state        TEXT NOT NULL DEFAULT 'queued',
-                message      TEXT DEFAULT '',
-                total_pages  INTEGER DEFAULT 0,
-                current_page INTEGER DEFAULT 0,
-                created_at   TEXT DEFAULT (datetime('now'))
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS pages (
-                upload_id TEXT NOT NULL,
-                page_num  INTEGER NOT NULL,
-                markdown  TEXT DEFAULT '',
-                state     TEXT NOT NULL DEFAULT 'pending',
-                error     TEXT,
-                PRIMARY KEY (upload_id, page_num)
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS schemas (
-                id         TEXT PRIMARY KEY,
-                company    TEXT NOT NULL,
-                name       TEXT NOT NULL,
-                fields     TEXT NOT NULL,
-                is_default INTEGER DEFAULT 0,
-                created_at TEXT DEFAULT (datetime('now'))
-            )
-        """)
-
-        # Safe migrations for existing databases
-        for col, default in [
-            ("extract_state", "NULL"),
-            ("extract_csv", "NULL"),
-        ]:
-            try:
-                conn.execute(f"ALTER TABLE uploads ADD COLUMN {col} TEXT DEFAULT {default}")
-            except Exception:
-                pass
-        try:
-            conn.execute("ALTER TABLE schemas ADD COLUMN is_default INTEGER DEFAULT 0")
-        except Exception:
-            pass
+    """No-op — Flask-Migrate handles schema creation."""
+    pass
 
 
-def db_update(uid: str, **kw):
-    with get_db() as conn:
-        sets = ", ".join(f"{k}=?" for k in kw)
-        conn.execute(f"UPDATE uploads SET {sets} WHERE id=?", [*kw.values(), uid])
+# ---------- Upload helpers ----------
+
+def _upload_to_dict(u: Upload) -> dict:
+    return {
+        "id": u.id,
+        "workspace_id": u.workspace_id,
+        "user_id": u.user_id,
+        "filename": u.filename,
+        "company": u.company,
+        "year": u.year,
+        "month": u.month,
+        "pdf_path": u.pdf_path,
+        "state": u.state,
+        "message": u.message,
+        "total_pages": u.total_pages,
+        "current_page": u.current_page,
+        "extract_state": u.extract_state,
+        "extract_csv": u.extract_csv,
+        "created_at": u.created_at.isoformat() if u.created_at else None,
+    }
 
 
 def db_get(uid: str) -> dict | None:
-    conn = get_db()
-    row = conn.execute("SELECT * FROM uploads WHERE id=?", (uid,)).fetchone()
-    conn.close()
-    return dict(row) if row else None
+    u = db.session.get(Upload, uid)
+    return _upload_to_dict(u) if u else None
 
 
-def db_list() -> list[dict]:
-    conn = get_db()
-    rows = conn.execute(
-        "SELECT id, filename, company, year, month, state, message,"
-        " total_pages, current_page, extract_state, extract_csv, created_at"
-        " FROM uploads ORDER BY created_at DESC"
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+def db_list(workspace_id: str | None = None) -> list[dict]:
+    query = Upload.query.order_by(Upload.created_at.desc())
+    if workspace_id:
+        query = query.filter_by(workspace_id=workspace_id)
+    return [_upload_to_dict(u) for u in query.all()]
+
+
+def db_update(uid: str, **kw):
+    u = db.session.get(Upload, uid)
+    if u:
+        for k, v in kw.items():
+            setattr(u, k, v)
+        db.session.commit()
+
+
+def db_create_upload(
+    uid: str,
+    filename: str,
+    company: str,
+    year: int | None,
+    month: int | None,
+    pdf_path: str,
+    state: str,
+    message: str,
+    total_pages: int,
+    workspace_id: str | None = None,
+    user_id: str | None = None,
+) -> dict:
+    u = Upload(
+        id=uid,
+        workspace_id=workspace_id,
+        user_id=user_id,
+        filename=filename,
+        company=company,
+        year=year,
+        month=month,
+        pdf_path=pdf_path,
+        state=state,
+        message=message,
+        total_pages=total_pages,
+    )
+    db.session.add(u)
+    db.session.commit()
+    return _upload_to_dict(u)
+
+
+def db_delete_upload(uid: str):
+    u = db.session.get(Upload, uid)
+    if u:
+        db.session.delete(u)
+        db.session.commit()
+
+
+def db_list_uploads_by_company_state(
+    company: str, state: str, extract_states: list[str | None]
+) -> list[dict]:
+    """List uploads filtered by company, state, and extract_state values."""
+    query = Upload.query.filter_by(company=company, state=state)
+    conditions = []
+    if None in extract_states:
+        conditions.append(Upload.extract_state.is_(None))
+    non_null = [s for s in extract_states if s is not None]
+    if non_null:
+        conditions.append(Upload.extract_state.in_(non_null))
+    if conditions:
+        from sqlalchemy import or_
+        query = query.filter(or_(*conditions))
+    return [_upload_to_dict(u) for u in query.all()]
+
+
+# ---------- Page helpers ----------
+
+def _page_to_dict(p: Page) -> dict:
+    return {
+        "upload_id": p.upload_id,
+        "page_num": p.page_num,
+        "markdown": p.markdown,
+        "state": p.state,
+        "error": p.error,
+    }
 
 
 def db_get_page(uid: str, page_num: int) -> dict | None:
-    conn = get_db()
-    row = conn.execute(
-        "SELECT * FROM pages WHERE upload_id=? AND page_num=?", (uid, page_num)
-    ).fetchone()
-    conn.close()
-    return dict(row) if row else None
+    p = db.session.get(Page, (uid, page_num))
+    return _page_to_dict(p) if p else None
 
 
 def db_page_states(uid: str) -> list[dict]:
-    conn = get_db()
-    rows = conn.execute(
-        "SELECT page_num, state FROM pages WHERE upload_id=? ORDER BY page_num",
-        (uid,),
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    pages = (
+        Page.query.filter_by(upload_id=uid)
+        .order_by(Page.page_num)
+        .all()
+    )
+    return [{"page_num": p.page_num, "state": p.state} for p in pages]
+
+
+def db_create_pages(uid: str, page_nums: list[int]):
+    """Bulk create page records (skips if already exists)."""
+    for pn in page_nums:
+        existing = db.session.get(Page, (uid, pn))
+        if not existing:
+            db.session.add(Page(upload_id=uid, page_num=pn, state="pending"))
+    db.session.commit()
+
+
+def db_get_parsed_pages(uid: str) -> list[dict]:
+    """Get all done pages for an upload, ordered by page_num."""
+    pages = (
+        Page.query.filter_by(upload_id=uid, state="done")
+        .order_by(Page.page_num)
+        .all()
+    )
+    return [{"page_num": p.page_num, "markdown": p.markdown} for p in pages]
+
+
+def db_update_page(uid: str, page_num: int, **kw):
+    p = db.session.get(Page, (uid, page_num))
+    if p:
+        for k, v in kw.items():
+            setattr(p, k, v)
+        db.session.commit()
+
+
+def db_update_page_done(uid: str, page_num: int, markdown: str):
+    p = db.session.get(Page, (uid, page_num))
+    if p:
+        p.markdown = markdown
+        p.state = "done"
+        db.session.commit()
+
+
+def db_update_page_error(uid: str, page_num: int, error: str):
+    p = db.session.get(Page, (uid, page_num))
+    if p:
+        p.state = "error"
+        p.error = error
+        db.session.commit()
+
+
+def db_get_pending_page_nums(uid: str) -> list[int]:
+    """Get page numbers that are pending or errored."""
+    pages = (
+        Page.query.filter(
+            Page.upload_id == uid,
+            Page.state.in_(["pending", "error"]),
+        )
+        .all()
+    )
+    return [p.page_num for p in pages]
+
+
+def db_reset_error_pages(uid: str):
+    """Reset all error pages to pending state."""
+    Page.query.filter_by(upload_id=uid, state="error").update(
+        {"state": "pending", "error": None}
+    )
+    db.session.commit()
+
+
+def db_reset_all_pages(uid: str):
+    """Reset all pages to pending state and clear markdown."""
+    Page.query.filter_by(upload_id=uid).update(
+        {"state": "pending", "markdown": None, "error": None}
+    )
+    db.session.commit()
 
 
 # ---------- Schema helpers ----------
 
-def _schema_row_to_dict(row: sqlite3.Row) -> dict:
-    d = dict(row)
-    d["fields"] = json.loads(d["fields"])
-    d["is_default"] = bool(d.get("is_default", 0))
-    return d
+def _schema_to_dict(s: SchemaModel) -> dict:
+    return {
+        "id": s.id,
+        "workspace_id": s.workspace_id,
+        "company": s.company,
+        "name": s.name,
+        "fields": s.fields,
+        "is_default": s.is_default,
+        "created_at": s.created_at.isoformat() if s.created_at else None,
+    }
 
 
-def db_create_schema(company: str, name: str, fields: list[dict]) -> dict:
-    sid = uuid.uuid4().hex[:12]
-    with get_db() as conn:
-        conn.execute(
-            "INSERT INTO schemas (id, company, name, fields) VALUES (?,?,?,?)",
-            (sid, company, name, json.dumps(fields)),
-        )
-    return db_get_schema(sid)  # type: ignore
+def db_create_schema(
+    company: str,
+    name: str,
+    fields: list[dict],
+    workspace_id: str | None = None,
+) -> dict:
+    s = SchemaModel(
+        company=company,
+        name=name,
+        fields=fields,
+        workspace_id=workspace_id,
+    )
+    db.session.add(s)
+    db.session.commit()
+    return _schema_to_dict(s)
 
 
 def db_get_schema(sid: str) -> dict | None:
-    conn = get_db()
-    row = conn.execute("SELECT * FROM schemas WHERE id=?", (sid,)).fetchone()
-    conn.close()
-    return _schema_row_to_dict(row) if row else None
+    s = db.session.get(SchemaModel, sid)
+    return _schema_to_dict(s) if s else None
 
 
-def db_list_schemas(company: str | None = None) -> list[dict]:
-    conn = get_db()
+def db_list_schemas(
+    company: str | None = None,
+    workspace_id: str | None = None,
+) -> list[dict]:
+    query = SchemaModel.query.order_by(SchemaModel.created_at.desc())
     if company:
-        rows = conn.execute(
-            "SELECT * FROM schemas WHERE company=? ORDER BY created_at DESC",
-            (company,),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT * FROM schemas ORDER BY created_at DESC"
-        ).fetchall()
-    conn.close()
-    return [_schema_row_to_dict(r) for r in rows]
+        query = query.filter_by(company=company)
+    if workspace_id:
+        query = query.filter_by(workspace_id=workspace_id)
+    return [_schema_to_dict(s) for s in query.all()]
 
 
 def db_update_schema(sid: str, **kw) -> dict | None:
-    if "fields" in kw:
-        kw["fields"] = json.dumps(kw["fields"])
-    with get_db() as conn:
-        sets = ", ".join(f"{k}=?" for k in kw)
-        conn.execute(f"UPDATE schemas SET {sets} WHERE id=?", [*kw.values(), sid])
-    return db_get_schema(sid)
+    s = db.session.get(SchemaModel, sid)
+    if not s:
+        return None
+    for k, v in kw.items():
+        setattr(s, k, v)
+    db.session.commit()
+    return _schema_to_dict(s)
 
 
 def db_delete_schema(sid: str):
-    with get_db() as conn:
-        conn.execute("DELETE FROM schemas WHERE id=?", (sid,))
+    s = db.session.get(SchemaModel, sid)
+    if s:
+        db.session.delete(s)
+        db.session.commit()
 
 
 def db_set_default_schema(sid: str):
     """Set a schema as the default for its company, unsetting any previous default."""
-    schema = db_get_schema(sid)
-    if not schema:
+    s = db.session.get(SchemaModel, sid)
+    if not s:
         return
-    with get_db() as conn:
-        conn.execute(
-            "UPDATE schemas SET is_default=0 WHERE company=?",
-            (schema["company"],),
-        )
-        conn.execute("UPDATE schemas SET is_default=1 WHERE id=?", (sid,))
+    SchemaModel.query.filter_by(company=s.company).update({"is_default": False})
+    s.is_default = True
+    db.session.commit()
 
 
 def db_get_default_schema(company: str) -> dict | None:
-    """Get the default schema for a company."""
-    conn = get_db()
-    row = conn.execute(
-        "SELECT * FROM schemas WHERE company=? AND is_default=1", (company,)
-    ).fetchone()
-    conn.close()
-    return _schema_row_to_dict(row) if row else None
+    s = SchemaModel.query.filter_by(company=company, is_default=True).first()
+    return _schema_to_dict(s) if s else None

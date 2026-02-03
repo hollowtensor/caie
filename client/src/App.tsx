@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
-import { Routes, Route } from 'react-router-dom'
-import { fetchUpload, resumeUpload } from './api'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { Routes, Route, Navigate } from 'react-router-dom'
+import { fetchUpload, resumeUpload, updateUpload } from './api'
 import type { Upload } from './types'
+import { useAuth } from './contexts/AuthContext'
 import { useUploads } from './hooks/useUploads'
 import { useSSE } from './hooks/useSSE'
 import { Layout } from './components/Layout'
@@ -10,8 +11,38 @@ import { UploadList } from './components/UploadList'
 import { PageGrid } from './components/PageGrid'
 import { ProgressCard } from './components/ProgressCard'
 import { MarkdownViewer } from './components/MarkdownViewer'
+import { DocumentInfo } from './components/DocumentInfo'
 import { ExtractPage } from './components/ExtractPage'
 import { SettingsPage } from './components/SettingsPage'
+import { LoginPage } from './pages/LoginPage'
+import { RegisterPage } from './pages/RegisterPage'
+import { WorkspaceSettingsPage } from './pages/WorkspaceSettingsPage'
+
+function ProtectedRoute({ children }: { children: ReactNode }) {
+  const { isAuthenticated, isLoading, currentWorkspace } = useAuth()
+
+  if (isLoading) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-gray-100">
+        <div className="text-sm text-gray-500">Loading...</div>
+      </div>
+    )
+  }
+
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace />
+  }
+
+  if (!currentWorkspace) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-gray-100">
+        <div className="text-sm text-gray-500">Setting up workspace...</div>
+      </div>
+    )
+  }
+
+  return <>{children}</>
+}
 
 function HomePage() {
   const { uploads, refresh } = useUploads()
@@ -62,6 +93,15 @@ function HomePage() {
     setActiveUpload(u)
   }, [activeId])
 
+  const handleReparse = useCallback(async () => {
+    if (!activeId) return
+    setSseId(activeId)
+    setActivePage(null)
+    await refresh()
+    const u = await fetchUpload(activeId)
+    setActiveUpload(u)
+  }, [activeId, refresh])
+
   const handleDelete = useCallback(() => {
     if (activeId) {
       setActiveId(null)
@@ -85,6 +125,14 @@ function HomePage() {
     </div>
   ) : (
     <div className="flex flex-1 flex-col gap-3">
+      {/* Document Info */}
+      {activeUpload && (
+        <DocumentInfo
+          upload={activeUpload}
+          onUpdate={(updated) => { setActiveUpload(updated); refresh() }}
+          onReparse={handleReparse}
+        />
+      )}
       <ProgressCard status={status} upload={activeUpload} uploadId={activeId} onResume={handleResume} />
       {activePage && activeId && (
         <MarkdownViewer uploadId={activeId} pageNum={activePage} />
@@ -98,9 +146,40 @@ function HomePage() {
 export default function App() {
   return (
     <Routes>
-      <Route path="/" element={<HomePage />} />
-      <Route path="/extract/:uploadId" element={<ExtractPage />} />
-      <Route path="/settings" element={<SettingsPage />} />
+      <Route path="/login" element={<LoginPage />} />
+      <Route path="/register" element={<RegisterPage />} />
+      <Route
+        path="/"
+        element={
+          <ProtectedRoute>
+            <HomePage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/extract/:uploadId"
+        element={
+          <ProtectedRoute>
+            <ExtractPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/settings"
+        element={
+          <ProtectedRoute>
+            <SettingsPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/workspace/settings"
+        element={
+          <ProtectedRoute>
+            <WorkspaceSettingsPage />
+          </ProtectedRoute>
+        }
+      />
     </Routes>
   )
 }

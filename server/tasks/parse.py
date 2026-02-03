@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 import base64
-import os
+import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import BytesIO
 
 import httpx
 import pypdfium2 as pdfium
+from flask import Flask
 from PIL import Image
 
-from ..config import PAGES_DIR
-from ..db import db_get, db_update, get_db
+import storage
 
 # ---------- Vision model constants ----------
 MODEL_ID = "lightonai/LightOnOCR-2-1B"
@@ -29,10 +29,14 @@ def render_pdf_page(page, max_res: int = MAX_RESOLUTION, scale: float = PDF_SCAL
     return page.render(scale=scale * factor, rev_byteorder=True).to_pil()
 
 
-def render_pdf_pages(pdf_path: str) -> list[Image.Image]:
-    pdf = pdfium.PdfDocument(pdf_path)
-    images = [render_pdf_page(pdf[i]) for i in range(len(pdf))]
-    pdf.close()
+def render_pdf_from_bytes(pdf_bytes: bytes) -> list[Image.Image]:
+    """Render PDF pages from bytes using a temporary file."""
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=True) as tmp:
+        tmp.write(pdf_bytes)
+        tmp.flush()
+        pdf = pdfium.PdfDocument(tmp.name)
+        images = [render_pdf_page(pdf[i]) for i in range(len(pdf))]
+        pdf.close()
     return images
 
 
@@ -51,7 +55,7 @@ def _clean_output(text: str) -> str:
     return result
 
 
-def parse_page(image: Image.Image, server_url: str, max_tokens: int = 4096) -> str:
+def parse_page(image: Image.Image, server_url: str, max_tokens: int = 8192) -> str:
     buf = BytesIO()
     image.save(buf, format="JPEG", quality=90)
     image_b64 = base64.b64encode(buf.getvalue()).decode()
@@ -85,169 +89,177 @@ def parse_page(image: Image.Image, server_url: str, max_tokens: int = 4096) -> s
     return _clean_output(text)
 
 
-def run_parse_job(uid: str, server_url: str):
+def run_parse_job(uid: str, server_url: str, app: Flask):
     """Background job: render PDF pages (or load images), then parse them concurrently."""
-    u = db_get(uid)
-    if not u:
-        return
+    def _run():
+        with app.app_context():
+            from db import (
+                db_create_pages,
+                db_get,
+                db_update,
+                db_update_page_done,
+                db_update_page_error,
+            )
+            from routes.extract import run_auto_extract
 
-    pdf_path = u["pdf_path"]
-    pages_dir = os.path.join(PAGES_DIR, uid)
-    os.makedirs(pages_dir, exist_ok=True)
+            u = db_get(uid)
+            if not u:
+                return
 
-    # Step 1: Render pages as images (skip for image uploads)
-    if pdf_path and os.path.exists(pdf_path):
-        try:
-            db_update(uid, state="rendering", message="Rendering PDF pages...")
-            images = render_pdf_pages(pdf_path)
-            total = len(images)
-            db_update(uid, total_pages=total, message=f"Saving {total} page images...")
-            for i, img in enumerate(images):
-                img.save(os.path.join(pages_dir, f"page_{i + 1:03d}.png"), "PNG")
+            pdf_key = u["pdf_path"]  # Now a Minio key like "abc123.pdf"
 
-            with get_db() as conn:
-                for i in range(total):
-                    conn.execute(
-                        "INSERT OR IGNORE INTO pages (upload_id, page_num, state)"
-                        " VALUES (?,?,?)",
-                        (uid, i + 1, "pending"),
-                    )
+            # Step 1: Render pages as images (skip for image uploads)
+            if pdf_key:
+                try:
+                    db_update(uid, state="rendering", message="Rendering PDF pages...")
 
-            db_update(uid, message=f"Rendered {total} pages")
-        except Exception as e:
-            db_update(uid, state="error", message=f"Render failed: {e}")
-            return
-    else:
-        # Image upload — pages already saved, load them
-        page_files = sorted(f for f in os.listdir(pages_dir) if f.endswith(".png"))
-        total = len(page_files)
-        if total == 0:
-            db_update(uid, state="error", message="No page images found")
-            return
-        images = [Image.open(os.path.join(pages_dir, pf)) for pf in page_files]
-        db_update(uid, total_pages=total, message=f"Loaded {total} images")
+                    # Download PDF from Minio and render
+                    pdf_bytes = storage.get_pdf(uid)
+                    images = render_pdf_from_bytes(pdf_bytes)
+                    total = len(images)
 
-    # Step 2: Parse pages concurrently
-    db_update(uid, state="parsing", message=f"Starting parse ({PARSE_WORKERS} workers)...")
-    done_count = 0
-    lock = threading.Lock()
+                    db_update(uid, total_pages=total, message=f"Saving {total} page images...")
 
-    def _parse_one(page_num, img):
-        nonlocal done_count
-        try:
-            markdown = parse_page(img, server_url)
-            with get_db() as conn:
-                conn.execute(
-                    "UPDATE pages SET markdown=?, state='done'"
-                    " WHERE upload_id=? AND page_num=?",
-                    (markdown, uid, page_num),
-                )
-        except Exception as e:
-            with get_db() as conn:
-                conn.execute(
-                    "UPDATE pages SET state='error', error=?"
-                    " WHERE upload_id=? AND page_num=?",
-                    (str(e), uid, page_num),
-                )
-        with lock:
-            done_count += 1
-            db_update(uid, current_page=done_count,
-                      message=f"Parsed {done_count}/{total}")
+                    # Save page images to Minio
+                    for i, img in enumerate(images, start=1):
+                        buf = BytesIO()
+                        img.save(buf, format="PNG")
+                        storage.upload_page_image(uid, i, buf.getvalue())
 
-    with ThreadPoolExecutor(max_workers=PARSE_WORKERS) as pool:
-        futures = {
-            pool.submit(_parse_one, i + 1, img): i + 1
-            for i, img in enumerate(images)
-        }
-        for fut in as_completed(futures):
-            fut.result()
+                    db_create_pages(uid, list(range(1, total + 1)))
+                    db_update(uid, message=f"Rendered {total} pages")
+                except Exception as e:
+                    db_update(uid, state="error", message=f"Render failed: {e}")
+                    return
+            else:
+                # Image upload — pages already saved to Minio
+                page_files = storage.list_page_images(uid)
+                total = len(page_files)
+                if total == 0:
+                    db_update(uid, state="error", message="No page images found")
+                    return
 
-    db_update(uid, state="done", current_page=total,
-              message=f"Done — {total} pages parsed")
-    from ..routes.extract import run_auto_extract
-    run_auto_extract(uid)
+                # Load images from Minio
+                images = []
+                for i in range(1, total + 1):
+                    img_bytes = storage.get_page_image(uid, i)
+                    images.append(Image.open(BytesIO(img_bytes)))
+
+                db_update(uid, total_pages=total, message=f"Loaded {total} images")
+
+            # Step 2: Parse pages concurrently
+            db_update(uid, state="parsing", message=f"Starting parse ({PARSE_WORKERS} workers)...")
+            done_count = 0
+            lock = threading.Lock()
+
+            def _parse_one(page_num, img):
+                nonlocal done_count
+                try:
+                    markdown = parse_page(img, server_url)
+                    with app.app_context():
+                        db_update_page_done(uid, page_num, markdown)
+                except Exception as e:
+                    with app.app_context():
+                        db_update_page_error(uid, page_num, str(e))
+                with lock:
+                    done_count += 1
+                    with app.app_context():
+                        db_update(uid, current_page=done_count,
+                                  message=f"Parsed {done_count}/{total}")
+
+            with ThreadPoolExecutor(max_workers=PARSE_WORKERS) as pool:
+                futures = {
+                    pool.submit(_parse_one, i + 1, img): i + 1
+                    for i, img in enumerate(images)
+                }
+                for fut in as_completed(futures):
+                    fut.result()
+
+            db_update(uid, state="done", current_page=total,
+                      message=f"Done — {total} pages parsed")
+            run_auto_extract(uid)
+
+    threading.Thread(target=_run, daemon=True).start()
 
 
-def resume_parse_job(uid: str, server_url: str):
+def resume_parse_job(uid: str, server_url: str, app: Flask):
     """Resume parsing for pages still pending or errored."""
-    u = db_get(uid)
-    if not u:
-        return
+    def _run():
+        with app.app_context():
+            from db import (
+                db_get,
+                db_get_pending_page_nums,
+                db_reset_error_pages,
+                db_update,
+                db_update_page_done,
+                db_update_page_error,
+            )
+            from routes.extract import run_auto_extract
 
-    pdf_path = u["pdf_path"]
-    pages_dir = os.path.join(PAGES_DIR, uid)
-    total = u["total_pages"]
+            u = db_get(uid)
+            if not u:
+                return
 
-    # If page images don't exist yet, re-render from PDF
-    if total == 0 or not os.path.isdir(pages_dir) or not os.listdir(pages_dir):
-        run_parse_job(uid, server_url)
-        return
+            total = u["total_pages"]
 
-    # Load images from disk
-    images = {}
-    for i in range(1, total + 1):
-        path = os.path.join(pages_dir, f"page_{i:03d}.png")
-        if os.path.exists(path):
-            images[i] = Image.open(path)
+            # If no pages recorded, start fresh
+            if total == 0:
+                run_parse_job(uid, server_url, app)
+                return
 
-    # Find pages that need parsing
-    with get_db() as conn:
-        rows = conn.execute(
-            "SELECT page_num FROM pages WHERE upload_id=? AND state IN ('pending','error')",
-            (uid,),
-        ).fetchall()
-        pending = [r[0] for r in rows]
-        # Reset error pages to pending
-        conn.execute(
-            "UPDATE pages SET state='pending', error=NULL"
-            " WHERE upload_id=? AND state='error'",
-            (uid,),
-        )
+            # Check if page images exist in Minio
+            page_files = storage.list_page_images(uid)
+            if not page_files:
+                run_parse_job(uid, server_url, app)
+                return
 
-    if not pending:
-        db_update(uid, state="done", current_page=total,
-                  message=f"Done — {total} pages parsed")
-        from ..routes.extract import run_auto_extract
-        run_auto_extract(uid)
-        return
+            # Load images from Minio
+            images = {}
+            for i in range(1, total + 1):
+                if storage.page_image_exists(uid, i):
+                    img_bytes = storage.get_page_image(uid, i)
+                    images[i] = Image.open(BytesIO(img_bytes))
 
-    already_done = total - len(pending)
-    db_update(uid, state="parsing", current_page=already_done,
-              message=f"Resuming — {len(pending)} pages remaining...")
-    done_count = already_done
-    lock = threading.Lock()
+            pending = db_get_pending_page_nums(uid)
+            db_reset_error_pages(uid)
 
-    def _parse_one(page_num, img):
-        nonlocal done_count
-        try:
-            markdown = parse_page(img, server_url)
-            with get_db() as conn:
-                conn.execute(
-                    "UPDATE pages SET markdown=?, state='done'"
-                    " WHERE upload_id=? AND page_num=?",
-                    (markdown, uid, page_num),
-                )
-        except Exception as e:
-            with get_db() as conn:
-                conn.execute(
-                    "UPDATE pages SET state='error', error=?"
-                    " WHERE upload_id=? AND page_num=?",
-                    (str(e), uid, page_num),
-                )
-        with lock:
-            done_count += 1
-            db_update(uid, current_page=done_count,
-                      message=f"Parsed {done_count}/{total}")
+            if not pending:
+                db_update(uid, state="done", current_page=total,
+                          message=f"Done — {total} pages parsed")
+                run_auto_extract(uid)
+                return
 
-    with ThreadPoolExecutor(max_workers=PARSE_WORKERS) as pool:
-        futures = {
-            pool.submit(_parse_one, pn, images[pn]): pn
-            for pn in pending if pn in images
-        }
-        for fut in as_completed(futures):
-            fut.result()
+            already_done = total - len(pending)
+            db_update(uid, state="parsing", current_page=already_done,
+                      message=f"Resuming — {len(pending)} pages remaining...")
+            done_count = already_done
+            lock = threading.Lock()
 
-    db_update(uid, state="done", current_page=total,
-              message=f"Done — {total} pages parsed")
-    from ..routes.extract import run_auto_extract
-    run_auto_extract(uid)
+            def _parse_one(page_num, img):
+                nonlocal done_count
+                try:
+                    markdown = parse_page(img, server_url)
+                    with app.app_context():
+                        db_update_page_done(uid, page_num, markdown)
+                except Exception as e:
+                    with app.app_context():
+                        db_update_page_error(uid, page_num, str(e))
+                with lock:
+                    done_count += 1
+                    with app.app_context():
+                        db_update(uid, current_page=done_count,
+                                  message=f"Parsed {done_count}/{total}")
+
+            with ThreadPoolExecutor(max_workers=PARSE_WORKERS) as pool:
+                futures = {
+                    pool.submit(_parse_one, pn, images[pn]): pn
+                    for pn in pending if pn in images
+                }
+                for fut in as_completed(futures):
+                    fut.result()
+
+            db_update(uid, state="done", current_page=total,
+                      message=f"Done — {total} pages parsed")
+            run_auto_extract(uid)
+
+    threading.Thread(target=_run, daemon=True).start()

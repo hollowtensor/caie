@@ -1,64 +1,95 @@
 from __future__ import annotations
 
 import json
-import os
-import shutil
 import threading
 import time
 import uuid
+from io import BytesIO
 
-from flask import Blueprint, Response, jsonify, request
+from flask import Blueprint, Response, current_app, g, jsonify, request
+from flask_jwt_extended import verify_jwt_in_request, get_jwt_identity
 
-from ..config import PAGES_DIR, PDF_DIR, SERVER_URL
-from ..db import db_get, db_list, db_update, get_db
-from ..tasks.parse import resume_parse_job, run_parse_job
+from auth import workspace_required
+import config
+from db import (
+    db_create_pages,
+    db_create_upload,
+    db_delete_upload,
+    db_get,
+    db_list,
+    db_update,
+)
+from extensions import db
+from models import User
+import storage
+from tasks.parse import resume_parse_job, run_parse_job
 
 bp = Blueprint("uploads", __name__)
 
 
 @bp.route("/api/uploads")
+@workspace_required
 def list_uploads():
-    return jsonify(db_list())
+    return jsonify(db_list(workspace_id=g.workspace.id))
 
 
 @bp.route("/api/uploads/<uid>")
+@workspace_required
 def get_upload(uid: str):
     u = db_get(uid)
-    if not u:
+    if not u or u.get("workspace_id") != g.workspace.id:
         return jsonify({"error": "Not found"}), 404
     return jsonify(u)
 
 
 @bp.route("/api/uploads/<uid>", methods=["DELETE"])
+@workspace_required
 def delete_upload(uid: str):
     u = db_get(uid)
-    if not u:
+    if not u or u.get("workspace_id") != g.workspace.id:
         return jsonify({"error": "Not found"}), 404
 
-    if u.get("pdf_path") and os.path.exists(u["pdf_path"]):
-        os.remove(u["pdf_path"])
-
-    pages_dir = os.path.join(PAGES_DIR, uid)
-    if os.path.isdir(pages_dir):
-        shutil.rmtree(pages_dir)
-
-    with get_db() as conn:
-        conn.execute("DELETE FROM pages WHERE upload_id=?", (uid,))
-        conn.execute("DELETE FROM uploads WHERE id=?", (uid,))
-
+    storage.delete_upload_files(uid)
+    db_delete_upload(uid)
     return jsonify({"ok": True})
+
+
+@bp.route("/api/uploads/<uid>", methods=["PUT"])
+@workspace_required
+def update_upload(uid: str):
+    u = db_get(uid)
+    if not u or u.get("workspace_id") != g.workspace.id:
+        return jsonify({"error": "Not found"}), 404
+
+    data = request.get_json(force=True)
+    updates = {}
+
+    if "company" in data:
+        updates["company"] = data["company"].strip()
+    if "year" in data:
+        updates["year"] = int(data["year"]) if data["year"] else None
+    if "month" in data:
+        updates["month"] = int(data["month"]) if data["month"] else None
+
+    if updates:
+        db_update(uid, **updates)
+
+    return jsonify(db_get(uid))
 
 
 ALLOWED_EXT = {".pdf", ".png", ".jpg", ".jpeg"}
 
 
 @bp.route("/upload", methods=["POST"])
+@workspace_required
 def upload():
+    import os
+    from PIL import Image as PILImage
+
     files = request.files.getlist("file")
     if not files or not files[0].filename:
         return jsonify({"error": "No file provided"}), 400
 
-    # Validate extensions
     for f in files:
         ext = os.path.splitext(f.filename or "")[1].lower()
         if ext not in ALLOWED_EXT:
@@ -67,71 +98,132 @@ def upload():
     company = request.form.get("company", "schneider").strip()
     year = request.form.get("year", "").strip()
     month = request.form.get("month", "").strip()
-    srv = request.form.get("server_url", "").strip() or SERVER_URL
+    srv = request.form.get("server_url", "").strip() or config.SERVER_URL
 
     uid = uuid.uuid4().hex[:12]
-    pages_dir = os.path.join(PAGES_DIR, uid)
-    os.makedirs(pages_dir, exist_ok=True)
 
     first_ext = os.path.splitext(files[0].filename or "")[1].lower()
     is_pdf = first_ext == ".pdf"
 
     if is_pdf:
-        # PDF flow — save PDF, rendering happens in parse job
-        pdf_path = os.path.join(PDF_DIR, f"{uid}.pdf")
-        files[0].save(pdf_path)
+        pdf_data = files[0].read()
+        pdf_key = storage.upload_pdf(uid, pdf_data, files[0].filename)
         filename = files[0].filename
+        total_pages = 0
     else:
-        # Image flow — save images directly as page PNGs
-        pdf_path = ""
+        pdf_key = ""
         filename = files[0].filename if len(files) == 1 else f"{len(files)} images"
-        from PIL import Image as PILImage
+        total_pages = len(files)
+
         for i, f in enumerate(sorted(files, key=lambda f: f.filename or ""), start=1):
             img = PILImage.open(f.stream).convert("RGB")
-            img.save(os.path.join(pages_dir, f"page_{i:03d}.png"), "PNG")
+            buf = BytesIO()
+            img.save(buf, format="PNG")
+            storage.upload_page_image(uid, i, buf.getvalue())
 
-    with get_db() as conn:
-        conn.execute(
-            "INSERT INTO uploads"
-            " (id, filename, company, year, month, pdf_path, state, message, total_pages)"
-            " VALUES (?,?,?,?,?,?,?,?,?)",
-            (uid, filename, company,
-             int(year) if year else None,
-             int(month) if month else None,
-             pdf_path, "queued", "Queued",
-             0 if is_pdf else len(files)),
-        )
-        if not is_pdf:
-            for i in range(1, len(files) + 1):
-                conn.execute(
-                    "INSERT OR IGNORE INTO pages (upload_id, page_num, state)"
-                    " VALUES (?,?,?)",
-                    (uid, i, "pending"),
-                )
+    db_create_upload(
+        uid=uid,
+        filename=filename,
+        company=company,
+        year=int(year) if year else None,
+        month=int(month) if month else None,
+        pdf_path=pdf_key,
+        state="queued",
+        message="Queued",
+        total_pages=total_pages,
+        workspace_id=g.workspace.id,
+        user_id=g.current_user.id,
+    )
 
-    threading.Thread(target=run_parse_job, args=(uid, srv), daemon=True).start()
+    if not is_pdf:
+        db_create_pages(uid, list(range(1, len(files) + 1)))
+
+    app = current_app._get_current_object()
+    threading.Thread(target=run_parse_job, args=(uid, srv, app), daemon=True).start()
     return jsonify({"id": uid})
 
 
 @bp.route("/api/uploads/<uid>/resume", methods=["POST"])
+@workspace_required
 def resume(uid: str):
     u = db_get(uid)
-    if not u:
+    if not u or u.get("workspace_id") != g.workspace.id:
         return jsonify({"error": "Not found"}), 404
     if u["state"] == "done":
         return jsonify({"error": "Already complete"}), 400
     srv = request.json.get("server_url", "") if request.is_json else ""
-    srv = srv.strip() or SERVER_URL
-    threading.Thread(target=resume_parse_job, args=(uid, srv), daemon=True).start()
+    srv = srv.strip() or config.SERVER_URL
+    app = current_app._get_current_object()
+    threading.Thread(target=resume_parse_job, args=(uid, srv, app), daemon=True).start()
+    return jsonify({"ok": True})
+
+
+@bp.route("/api/uploads/<uid>/reparse", methods=["POST"])
+@workspace_required
+def reparse(uid: str):
+    """Force reparse the document, clearing all existing parsing and extraction data."""
+    from db import db_reset_all_pages
+
+    u = db_get(uid)
+    if not u or u.get("workspace_id") != g.workspace.id:
+        return jsonify({"error": "Not found"}), 404
+
+    # Delete extraction CSV if exists
+    csv_filename = u.get("extract_csv")
+    if csv_filename:
+        try:
+            storage.delete_csv(csv_filename)
+        except Exception:
+            pass  # Ignore if file doesn't exist
+
+    # Reset upload state and clear extraction
+    db_update(
+        uid,
+        state="queued",
+        message="Queued for reparse",
+        current_page=0,
+        extract_state=None,
+        extract_csv=None,
+    )
+
+    # Reset all pages to pending
+    db_reset_all_pages(uid)
+
+    # Start parse job
+    srv = request.json.get("server_url", "") if request.is_json else ""
+    srv = srv.strip() or config.SERVER_URL
+    app = current_app._get_current_object()
+    threading.Thread(target=run_parse_job, args=(uid, srv, app), daemon=True).start()
+
     return jsonify({"ok": True})
 
 
 @bp.route("/api/uploads/<uid>/status")
 def upload_status(uid: str):
+    """SSE endpoint for upload status. Accepts token via query param for EventSource."""
+    # Authenticate via query param token (EventSource can't set headers)
+    token = request.args.get("token")
+    if token:
+        # Manually set Authorization header for JWT verification
+        request.headers = dict(request.headers)
+        request.headers["Authorization"] = f"Bearer {token}"
+
+    try:
+        verify_jwt_in_request()
+        user_id = get_jwt_identity()
+        user = db.session.get(User, user_id)
+        if not user:
+            return jsonify({"error": "Unauthorized"}), 401
+    except Exception:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    app = current_app._get_current_object()
+
     def stream():
         last = ""
         while True:
-            u = db_get(uid)
+            with app.app_context():
+                u = db_get(uid)
             if not u:
                 yield 'data: {"error":"not found"}\n\n'
                 break
@@ -142,7 +234,6 @@ def upload_status(uid: str):
                 yield f"data: {d}\n\n"
                 last = d
             if u["state"] in ("done", "error"):
-                # Keep streaming if auto-extraction is still running
                 ext = u.get("extract_state")
                 if ext != "running":
                     break

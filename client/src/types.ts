@@ -11,6 +11,8 @@ export interface Upload {
   extract_state: string | null
   extract_csv: string | null
   created_at: string
+  workspace_id?: string
+  user_id?: string
 }
 
 export interface Page {
@@ -70,11 +72,13 @@ export interface Schema {
   fields: ExtractConfig
   is_default: boolean
   created_at: string
+  workspace_id?: string
 }
 
 export interface ScanResult {
   tables_found: number
   pages_found: number
+  row_columns: string[]
   value_columns: string[]
   extra_columns: string[]
 }
@@ -99,4 +103,45 @@ export interface ExtractResult {
   page_count: number
   row_count: number
   row_table_indices: number[]
+}
+
+// Auth types
+export interface User {
+  id: string
+  email: string
+  name: string
+  created_at?: string
+}
+
+export interface WorkspaceInfo {
+  id: string
+  name: string
+  role: string
+}
+
+export interface WorkspaceMember {
+  user_id: string
+  email: string
+  name: string
+  role: string
+  joined_at: string
+}
+
+export interface WorkspaceDetails extends WorkspaceInfo {
+  owner_id: string
+  members: WorkspaceMember[]
+  created_at: string
+}
+
+export interface AuthResponse {
+  user: User
+  workspace?: WorkspaceInfo
+  workspaces?: WorkspaceInfo[]
+  access_token: string
+  refresh_token: string
+}
+
+export interface MeResponse {
+  user: User
+  workspaces: WorkspaceInfo[]
 }

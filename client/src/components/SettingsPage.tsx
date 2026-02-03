@@ -170,9 +170,25 @@ function NewConfigForm({
         )}
       </div>
 
-      {/* Scan results — value columns info + extra column checkboxes */}
+      {/* Scan results — row columns, value columns info + extra column checkboxes */}
       {scanResult && (
         <div className="space-y-3 rounded border border-gray-200 bg-white p-3">
+          {/* Row columns */}
+          {scanResult.row_columns && scanResult.row_columns.length > 0 && (
+            <div>
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400">
+                Matched Row Columns
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {scanResult.row_columns.map((rc) => (
+                  <span key={rc} className="rounded bg-green-50 px-2 py-0.5 text-[10px] text-green-600 font-medium">
+                    {rc}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Value columns */}
           <div>
             <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-400">

@@ -71,10 +71,12 @@ export function ProgressCard({ status, upload, uploadId, onResume }: Props) {
               >
                 Custom Extract
               </Link>
+              {/* Download Parsed hidden for now
               <a href={`/api/uploads/${uploadId}/markdown`}
                 className="rounded-lg border border-gray-200 px-3 py-2 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-50">
                 Download Parsed
               </a>
+              */}
             </div>
           ) : extractState === 'running' ? (
             <div className="flex items-center gap-2 text-xs text-blue-600">
@@ -100,11 +102,13 @@ export function ProgressCard({ status, upload, uploadId, onResume }: Props) {
               >
                 Custom Extract
               </Link>
+              {/* Download Parsed hidden for now
               <span className="text-xs text-gray-300">|</span>
               <a href={`/api/uploads/${uploadId}/markdown`}
                 className="text-xs font-medium text-gray-500 hover:text-gray-700">
                 Download Parsed
               </a>
+              */}
             </div>
           ) : extractState === 'error' ? (
             <div className="flex items-center gap-2">
@@ -115,11 +119,13 @@ export function ProgressCard({ status, upload, uploadId, onResume }: Props) {
               >
                 Try Custom Extract
               </Link>
+              {/* Download Parsed hidden for now
               <span className="text-xs text-gray-300">|</span>
               <a href={`/api/uploads/${uploadId}/markdown`}
                 className="text-xs font-medium text-gray-500 hover:text-gray-700">
                 Download Parsed
               </a>
+              */}
             </div>
           ) : (
             <div className="flex items-center gap-2">
@@ -129,10 +135,12 @@ export function ProgressCard({ status, upload, uploadId, onResume }: Props) {
               >
                 Extract Pricelist
               </Link>
+              {/* Download Parsed hidden for now
               <a href={`/api/uploads/${uploadId}/markdown`}
                 className="rounded border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-50">
                 Download Parsed
               </a>
+              */}
             </div>
           )}
         </div>

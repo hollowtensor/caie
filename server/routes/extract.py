@@ -2,27 +2,28 @@ from __future__ import annotations
 
 import csv
 import math
-import os
 import re
 from collections import Counter
 from io import StringIO
 
-from flask import Blueprint, Response, jsonify, request, send_file
+from flask import Blueprint, Response, g, jsonify, request
 
-from ..config import OUTPUT_DIR
-from ..db import (
+from auth import workspace_required
+from db import (
     db_create_schema,
     db_delete_schema,
     db_get,
     db_get_default_schema,
+    db_get_parsed_pages,
     db_get_schema,
     db_list_schemas,
+    db_list_uploads_by_company_state,
     db_set_default_schema,
     db_update,
     db_update_schema,
-    get_db,
 )
-from ..utils.tables import extract_tables
+import storage
+from utils.tables import extract_tables
 
 bp = Blueprint("extract", __name__)
 
@@ -30,34 +31,39 @@ bp = Blueprint("extract", __name__)
 # ---------- Schema CRUD ----------
 
 @bp.route("/api/schemas", methods=["GET"])
+@workspace_required
 def list_schemas():
     company = request.args.get("company")
-    return jsonify(db_list_schemas(company))
+    return jsonify(db_list_schemas(company, workspace_id=g.workspace.id))
 
 
 @bp.route("/api/schemas", methods=["POST"])
+@workspace_required
 def create_schema():
     data = request.get_json(force=True)
     schema = db_create_schema(
         company=data["company"],
         name=data["name"],
         fields=data["fields"],
+        workspace_id=g.workspace.id,
     )
     return jsonify(schema), 201
 
 
 @bp.route("/api/schemas/<sid>", methods=["GET"])
+@workspace_required
 def get_schema(sid: str):
     s = db_get_schema(sid)
-    if not s:
+    if not s or s.get("workspace_id") != g.workspace.id:
         return jsonify({"error": "Not found"}), 404
     return jsonify(s)
 
 
 @bp.route("/api/schemas/<sid>", methods=["PUT"])
+@workspace_required
 def update_schema(sid: str):
     s = db_get_schema(sid)
-    if not s:
+    if not s or s.get("workspace_id") != g.workspace.id:
         return jsonify({"error": "Not found"}), 404
     data = request.get_json(force=True)
     kw = {}
@@ -72,29 +78,31 @@ def update_schema(sid: str):
 
 
 @bp.route("/api/schemas/<sid>", methods=["DELETE"])
+@workspace_required
 def delete_schema(sid: str):
+    s = db_get_schema(sid)
+    if not s or s.get("workspace_id") != g.workspace.id:
+        return jsonify({"error": "Not found"}), 404
     db_delete_schema(sid)
     return jsonify({"ok": True})
 
 
 @bp.route("/api/schemas/<sid>/set-default", methods=["POST"])
+@workspace_required
 def set_default(sid: str):
     s = db_get_schema(sid)
-    if not s:
+    if not s or s.get("workspace_id") != g.workspace.id:
         return jsonify({"error": "Not found"}), 404
     db_set_default_schema(sid)
 
-    # Re-extract uploads for this company that had no config or errored
     company = s["company"]
-    conn = get_db()
-    rows = conn.execute(
-        "SELECT id FROM uploads WHERE company=? AND state='done'"
-        " AND (extract_state IS NULL OR extract_state IN ('no_config', 'error'))",
-        (company,),
-    ).fetchall()
-    conn.close()
-    for r in rows:
-        run_auto_extract(r["id"])
+    uploads = db_list_uploads_by_company_state(
+        company, "done", [None, "no_config", "error"]
+    )
+    # Only re-extract uploads in the current workspace
+    for u in uploads:
+        if u.get("workspace_id") == g.workspace.id:
+            run_auto_extract(u["id"])
 
     return jsonify({"ok": True})
 
@@ -103,13 +111,7 @@ def set_default(sid: str):
 
 def _load_pages(uid: str) -> list[dict]:
     """Load and pre-parse all done pages for an upload."""
-    conn = get_db()
-    rows = conn.execute(
-        "SELECT page_num, markdown FROM pages"
-        " WHERE upload_id=? AND state='done' ORDER BY page_num",
-        (uid,),
-    ).fetchall()
-    conn.close()
+    rows = db_get_parsed_pages(uid)
 
     parsed = []
     for r in rows:
@@ -124,12 +126,6 @@ def _load_pages(uid: str) -> list[dict]:
 
 
 def _derive_variant(display_col: str, anchor: str) -> str:
-    """Derive variant name from a display column by removing anchor-matching parts.
-
-    "Unit MRP [₹] | M7 (220V)" + "Unit MRP" → "M7 (220V)"
-    "Unit MRP [₹]"             + "Unit MRP" → ""
-    "Bottom Hole | Unit MRP [€]" + "Unit MRP" → "Bottom Hole"
-    """
     anchor_lower = anchor.lower()
     parts = [p.strip() for p in display_col.split(" | ")]
     remaining = [p for p in parts if anchor_lower not in p.lower()]
@@ -137,20 +133,17 @@ def _derive_variant(display_col: str, anchor: str) -> str:
 
 
 def _find_nearest_left(val_idx: int, ref_indices: list[int]) -> int | None:
-    """Find the nearest ref index that is <= val_idx."""
     best = None
     for ri in ref_indices:
         if ri <= val_idx:
             if best is None or ri > best:
                 best = ri
-    # Fallback: if no ref to the left, use the first ref
     return best if best is not None else (ref_indices[0] if ref_indices else None)
 
 
 # ---------- Scan ----------
 
 def _scan_tables(uid: str, row_anchor: str, value_anchor: str) -> dict:
-    """Scan all tables for anchor matches, return discovery info."""
     parsed_pages = _load_pages(uid)
 
     ra = row_anchor.lower()
@@ -158,8 +151,10 @@ def _scan_tables(uid: str, row_anchor: str, value_anchor: str) -> dict:
 
     tables_found = 0
     pages_found: set[int] = set()
+    row_cols_seen: set[str] = set()
     value_cols_seen: set[str] = set()
     extra_cols_seen: set[str] = set()
+    row_columns: list[str] = []
     value_columns: list[str] = []
     extra_columns: list[str] = []
 
@@ -176,11 +171,15 @@ def _scan_tables(uid: str, row_anchor: str, value_anchor: str) -> dict:
 
             for c in dc:
                 cl = c.lower()
-                if va in cl:
+                if ra in cl:
+                    if c not in row_cols_seen:
+                        row_cols_seen.add(c)
+                        row_columns.append(c)
+                elif va in cl:
                     if c not in value_cols_seen:
                         value_cols_seen.add(c)
                         value_columns.append(c)
-                elif ra not in cl:
+                else:
                     if c not in extra_cols_seen:
                         extra_cols_seen.add(c)
                         extra_columns.append(c)
@@ -188,15 +187,17 @@ def _scan_tables(uid: str, row_anchor: str, value_anchor: str) -> dict:
     return {
         "tables_found": tables_found,
         "pages_found": len(pages_found),
+        "row_columns": row_columns,
         "value_columns": value_columns,
         "extra_columns": extra_columns,
     }
 
 
 @bp.route("/api/uploads/<uid>/scan-columns", methods=["POST"])
+@workspace_required
 def scan_columns(uid: str):
     u = db_get(uid)
-    if not u:
+    if not u or u.get("workspace_id") != g.workspace.id:
         return jsonify({"error": "Not found"}), 404
 
     data = request.get_json(force=True)
@@ -212,13 +213,11 @@ def scan_columns(uid: str):
 # ---------- Extraction ----------
 
 def _get_config(data: dict) -> dict | None:
-    """Extract config from request (schema_id or inline)."""
     if "schema_id" in data:
         schema = db_get_schema(data["schema_id"])
         if not schema:
             return None
         cfg = schema["fields"]
-        # Reject old-format schemas (list instead of dict)
         return cfg if isinstance(cfg, dict) else None
     config = {}
     for key in ("row_anchor", "value_anchor", "extras", "include_page", "include_heading"):
@@ -230,7 +229,6 @@ def _get_config(data: dict) -> dict | None:
 
 
 def _extract(uid: str, config: dict) -> dict:
-    """Flat anchor-based extraction."""
     parsed_pages = _load_pages(uid)
 
     row_anchor = config.get("row_anchor", "").strip()
@@ -242,7 +240,6 @@ def _extract(uid: str, config: dict) -> dict:
     ra = row_anchor.lower()
     va = value_anchor.lower()
 
-    # Determine if we need a Variant column (multiple distinct value columns)
     all_value_display: set[str] = set()
     for pp in parsed_pages:
         for t in pp["tables"]:
@@ -251,19 +248,17 @@ def _extract(uid: str, config: dict) -> dict:
                     all_value_display.add(c)
     has_variants = len(all_value_display) > 1
 
-    # Build output column headers
     output_columns: list[str] = []
     if include_page:
         output_columns.append("Page")
-    if include_heading:
-        output_columns.append("Heading")
     output_columns.extend(extras_list)
     output_columns.append(row_anchor)
     if has_variants:
         output_columns.append("Variant")
     output_columns.append(value_anchor)
+    if include_heading:
+        output_columns.append("Heading")
 
-    # Extract rows
     output_rows: list[list[str]] = []
     row_table_indices: list[int] = []
     pages_used: set[int] = set()
@@ -283,7 +278,6 @@ def _extract(uid: str, config: dict) -> dict:
             if not ref_indices or not val_indices:
                 continue
 
-            # Map extras to column indices in this table (None if missing)
             extra_indices: list[int | None] = []
             for ext in extras_list:
                 ext_lower = ext.lower()
@@ -295,7 +289,6 @@ def _extract(uid: str, config: dict) -> dict:
                 extra_indices.append(found)
 
             for data_row in rows:
-                # Skip section header rows (all non-empty cells identical)
                 unique_vals = set(v for v in data_row if v and v != "-")
                 if len(unique_vals) <= 1:
                     continue
@@ -315,8 +308,6 @@ def _extract(uid: str, config: dict) -> dict:
                     out: list[str] = []
                     if include_page:
                         out.append(str(page_num))
-                    if include_heading:
-                        out.append(heading_text)
                     for ei in extra_indices:
                         out.append(data_row[ei] if ei is not None and ei < len(data_row) else "-")
                     out.append(reference)
@@ -324,6 +315,8 @@ def _extract(uid: str, config: dict) -> dict:
                         variant = _derive_variant(dc[vi], value_anchor)
                         out.append(variant if variant else "-")
                     out.append(value)
+                    if include_heading:
+                        out.append(heading_text)
 
                     output_rows.append(out)
                     row_table_indices.append(ti)
@@ -345,7 +338,6 @@ def _extract(uid: str, config: dict) -> dict:
 # ---------- Anomaly Detection ----------
 
 def _is_numeric(v: str) -> bool:
-    """Check if a string represents a number (after stripping commas/spaces)."""
     v = v.replace(",", "").replace(" ", "").strip()
     if not v:
         return False
@@ -357,7 +349,6 @@ def _is_numeric(v: str) -> bool:
 
 
 def _percentile(sorted_vals: list[float], p: float) -> float:
-    """Compute percentile from a sorted list."""
     if not sorted_vals:
         return 0.0
     k = (len(sorted_vals) - 1) * (p / 100)
@@ -369,7 +360,6 @@ def _percentile(sorted_vals: list[float], p: float) -> float:
 
 
 def _profile_column(values: list[str]) -> dict:
-    """Build a statistical profile for a column's values."""
     if not values:
         return {"skip": True}
 
@@ -379,13 +369,11 @@ def _profile_column(values: list[str]) -> dict:
     )
     numeric_count = sum(1 for v in values if _is_numeric(v))
     freq = Counter(v.lower().rstrip("*") for v in values)
-    # Common threshold: ≥1% of total values (min 5)
     common_threshold = max(5, len(values) * 0.01)
 
     q1_len = _percentile(lengths, 25)
     q3_len = _percentile(lengths, 75)
     iqr_len = q3_len - q1_len
-    # Ensure minimum lower bound of 2 chars
     lower_len = max(q1_len - 1.5 * iqr_len, 1)
     upper_len = q3_len + 1.5 * iqr_len
 
@@ -406,7 +394,6 @@ def _profile_column(values: list[str]) -> dict:
 
 
 def _check_cell(value: str, profile: dict) -> str | None:
-    """Check a single cell value against its column profile. Return reason or None."""
     if profile.get("skip") or not value or value == "-":
         return None
 
@@ -414,15 +401,12 @@ def _check_cell(value: str, profile: dict) -> str | None:
     threshold = profile.get("common_threshold", 5)
     is_common = freq.get(value.lower().rstrip("*"), 0) >= threshold
 
-    # Common values are exempt from all checks — they appear enough to be intentional
     if is_common:
         return None
 
-    # Check 1: numeric column has non-numeric value
     if profile["is_numeric_col"] and not _is_numeric(value):
         return "non-numeric in price column"
 
-    # Check 2: unusual length
     vlen = len(value)
     lower = profile["lower_len"]
     upper = profile["upper_len"]
@@ -431,7 +415,6 @@ def _check_cell(value: str, profile: dict) -> str | None:
     if vlen > upper:
         return f"unusual length ({vlen} chars, expected {int(lower)}-{int(upper)})"
 
-    # Check 3: unusual character composition
     dr = sum(c.isdigit() for c in value) / max(len(value), 1)
     if abs(dr - profile["digit_ratio_median"]) > 0.5:
         return "unusual character pattern"
@@ -440,13 +423,11 @@ def _check_cell(value: str, profile: dict) -> str | None:
 
 
 def _detect_anomalies(columns: list[str], rows: list[list[str]]) -> list[dict]:
-    """Profile each column and flag anomalous cells."""
     if not rows or not columns:
         return []
 
     n_cols = len(columns)
 
-    # Skip metadata columns (Page, Heading) — only profile data columns
     skip_cols = {"page", "heading", "variant"}
     profiles = []
     for ci in range(n_cols):
@@ -468,9 +449,10 @@ def _detect_anomalies(columns: list[str], rows: list[list[str]]) -> list[dict]:
 
 
 @bp.route("/api/uploads/<uid>/extract", methods=["POST"])
+@workspace_required
 def extract_data(uid: str):
     u = db_get(uid)
-    if not u:
+    if not u or u.get("workspace_id") != g.workspace.id:
         return jsonify({"error": "Not found"}), 404
 
     data = request.get_json(force=True)
@@ -483,9 +465,10 @@ def extract_data(uid: str):
 
 
 @bp.route("/api/uploads/<uid>/extract/csv", methods=["POST"])
+@workspace_required
 def extract_csv(uid: str):
     u = db_get(uid)
-    if not u:
+    if not u or u.get("workspace_id") != g.workspace.id:
         return jsonify({"error": "Not found"}), 404
 
     data = request.get_json(force=True)
@@ -533,37 +516,38 @@ def run_auto_extract(uid: str):
         db_update(uid, extract_state="running")
         result = _extract(uid, cfg)
 
-        # Write CSV to OUTPUT_DIR
         csv_filename = f"{uid}_extract.csv"
-        csv_path = os.path.join(OUTPUT_DIR, csv_filename)
-        with open(csv_path, "w", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(result["columns"])
-            writer.writerows(result["rows"])
+        buf = StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(result["columns"])
+        writer.writerows(result["rows"])
+        storage.upload_csv(csv_filename, buf.getvalue().encode("utf-8"))
 
         db_update(uid, extract_state="done", extract_csv=csv_filename)
-    except Exception as e:
+    except Exception:
         db_update(uid, extract_state="error")
 
 
 @bp.route("/api/uploads/<uid>/extract/download")
+@workspace_required
 def extract_download(uid: str):
     u = db_get(uid)
-    if not u:
+    if not u or u.get("workspace_id") != g.workspace.id:
         return jsonify({"error": "Not found"}), 404
 
     csv_filename = u.get("extract_csv")
     if not csv_filename:
         return jsonify({"error": "No extraction available"}), 404
 
-    csv_path = os.path.join(OUTPUT_DIR, csv_filename)
-    if not os.path.exists(csv_path):
+    if not storage.csv_exists(csv_filename):
         return jsonify({"error": "CSV file not found"}), 404
 
+    csv_data = storage.get_csv(csv_filename)
     basename = u["filename"].rsplit(".", 1)[0] if u.get("filename") else uid
-    return send_file(
-        csv_path,
+    return Response(
+        csv_data,
         mimetype="text/csv",
-        as_attachment=True,
-        download_name=f"{basename}_extract.csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="{basename}_extract.csv"'
+        },
     )

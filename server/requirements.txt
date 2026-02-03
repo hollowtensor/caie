@@ -1,0 +1,15 @@
+flask
+flask-cors
+flask-sqlalchemy
+flask-migrate
+flask-jwt-extended
+python-dotenv
+httpx
+pypdfium2
+pillow
+pydantic
+beautifulsoup4
+psycopg2-binary
+redis
+minio
+werkzeug

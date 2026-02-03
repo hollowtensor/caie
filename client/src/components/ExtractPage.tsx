@@ -466,6 +466,7 @@ function ExportView({
                         ) : (
                           <>
                             <div className="flex items-center gap-2">
+                              {/* VLM button hidden for now
                               <button
                                 onClick={() => handleValidate('vlm')}
                                 className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-blue-700"
@@ -476,14 +477,15 @@ function ExportView({
                                 </svg>
                                 VLM
                               </button>
+                              */}
                               <button
                                 onClick={() => handleValidate('llm')}
                                 className="inline-flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-violet-700"
                               >
                                 <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                                 </svg>
-                                LLM
+                                Validate
                               </button>
                             </div>
                             {vlmError && (

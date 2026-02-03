@@ -1,0 +1,25 @@
+[project]
+name = "caie-server"
+version = "0.1.0"
+description = "CAIE API Server"
+requires-python = ">=3.12"
+dependencies = [
+    "flask",
+    "flask-cors",
+    "flask-sqlalchemy",
+    "flask-migrate",
+    "flask-jwt-extended",
+    "python-dotenv",
+    "httpx",
+    "pypdfium2",
+    "pillow",
+    "pydantic",
+    "beautifulsoup4",
+    "psycopg2-binary",
+    "redis",
+    "minio",
+    "werkzeug",
+]
+
+[dependency-groups]
+dev = []

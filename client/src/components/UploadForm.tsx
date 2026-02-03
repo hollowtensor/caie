@@ -13,7 +13,7 @@ export function UploadForm({ serverUrl, onUploaded }: Props) {
   const [fileLabel, setFileLabel] = useState('')
   const [uploading, setUploading] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
-  const [srvUrl, setSrvUrl] = useState(serverUrl || 'http://localhost:8000/v1')
+  const [srvUrl, setSrvUrl] = useState(serverUrl || '')
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -26,7 +26,10 @@ export function UploadForm({ serverUrl, onUploaded }: Props) {
     for (const file of Array.from(files)) {
       fd.append('file', file)
     }
-    fd.set('server_url', srvUrl)
+    // Only send server_url if user explicitly set it
+    if (srvUrl.trim()) {
+      fd.set('server_url', srvUrl)
+    }
     try {
       const { id } = await uploadPdf(fd)
       onUploaded(id)
@@ -52,6 +55,7 @@ export function UploadForm({ serverUrl, onUploaded }: Props) {
               <option value="schneider">Schneider</option>
               <option value="legrand">Legrand</option>
               <option value="siemens">Siemens</option>
+              <option value="abb">ABB</option>
             </select>
           </div>
           <div className="flex-1">
@@ -82,7 +86,7 @@ export function UploadForm({ serverUrl, onUploaded }: Props) {
 
         <button type="submit" disabled={uploading}
           className="w-full rounded bg-blue-500 py-2 text-sm font-semibold text-white transition-colors hover:bg-blue-600 disabled:bg-blue-300">
-          {uploading ? 'Uploading...' : 'Upload & Parse'}
+          {uploading ? 'Uploading...' : 'Upload'}
         </button>
       </form>
 
@@ -92,8 +96,9 @@ export function UploadForm({ serverUrl, onUploaded }: Props) {
       </button>
       {showSettings && (
         <div className="mt-2">
-          <label className="mb-0.5 block text-[11px] font-semibold text-gray-500">Parse Server URL</label>
+          <label className="mb-0.5 block text-[11px] font-semibold text-gray-500">Parse Server URL (optional)</label>
           <input type="text" value={srvUrl} onChange={(e) => setSrvUrl(e.target.value)}
+            placeholder="Leave empty to use server default"
             className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm" />
         </div>
       )}

@@ -1,5 +1,86 @@
 # Changelog
 
+## v2.0.0-rc.1 — Release Candidate 1 (Major)
+
+### Breaking Changes
+
+- **Database**: Migrated from SQLite to PostgreSQL — requires database migration
+- **Storage**: Migrated from local filesystem to Minio S3-compatible object storage
+- **Authentication**: All API endpoints now require JWT authentication (except /auth/*)
+- **Multi-tenancy**: All data is now scoped to workspaces via `X-Workspace-Id` header
+
+### Features
+
+#### User Authentication
+- JWT-based authentication with access and refresh tokens
+- User registration with email, password, and name
+- Login/logout with token blacklisting via Redis
+- Automatic token refresh on expiry
+- Protected routes with `@auth_required` and `@workspace_required` decorators
+
+#### Multi-Workspace Support
+- Users can create and manage multiple workspaces
+- Workspace member management with owner/member roles
+- Workspace invitation system
+- Workspace selector in header for quick switching
+- All uploads, schemas, and extractions scoped to workspace
+- Workspace settings page for member management
+
+#### Production Infrastructure
+- **PostgreSQL 16**: Production-grade relational database
+- **Redis 7**: Token blacklisting and session management
+- **Minio**: S3-compatible object storage for PDFs, pages, and outputs
+- **Docker Compose**: Full stack deployment with health checks
+- **Flask-Migrate**: Alembic-based database migrations
+
+#### Image Upload Support
+- Upload PNG and JPG images alongside PDFs
+- Automatic format detection and processing
+
+### Architecture
+
+- **Flask-SQLAlchemy**: ORM with relationship models
+- **Flask-JWT-Extended**: JWT token management
+- **Minio Python SDK**: Object storage abstraction
+- **AuthContext**: React context for auth state management
+- **authFetch**: Wrapper for authenticated API requests with auto-refresh
+
+### New Files
+
+- `server/models.py` — SQLAlchemy models (User, Workspace, WorkspaceMember, Upload, Page, Schema)
+- `server/auth.py` — Auth decorators (@auth_required, @workspace_required)
+- `server/storage.py` — Minio storage abstraction
+- `server/extensions.py` — Flask extension instances
+- `server/routes/auth.py` — Authentication endpoints
+- `server/routes/workspaces.py` — Workspace management endpoints
+- `client/src/contexts/AuthContext.tsx` — React auth context
+- `client/src/pages/LoginPage.tsx` — Login form
+- `client/src/pages/RegisterPage.tsx` — Registration form
+- `client/src/pages/WorkspaceSettingsPage.tsx` — Workspace management UI
+- `client/src/components/WorkspaceSelector.tsx` — Workspace switcher
+
+### Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DATABASE_URL` | `postgresql://caie:caie_dev@localhost:5432/caie` | PostgreSQL connection |
+| `REDIS_URL` | `redis://localhost:6379/0` | Redis for JWT blacklisting |
+| `MINIO_ENDPOINT` | `localhost:9000` | Minio S3 endpoint |
+| `MINIO_ACCESS_KEY` | `minioadmin` | Minio access key |
+| `MINIO_SECRET_KEY` | `minioadmin` | Minio secret key |
+| `MINIO_SECURE` | `false` | Use HTTPS for Minio |
+| `JWT_SECRET_KEY` | `change-me-in-production` | JWT signing key |
+| `JWT_ACCESS_TOKEN_EXPIRES` | `900` (15 min) | Access token TTL |
+| `JWT_REFRESH_TOKEN_EXPIRES` | `2592000` (30 days) | Refresh token TTL |
+
+### Upgrade Guide
+
+1. Start infrastructure: `docker compose up -d postgres redis minio`
+2. Run migrations: `flask db upgrade`
+3. Register a new user (previous SQLite data is not migrated)
+
+---
+
 ## v1.0.0-rc.1 — Release Candidate 1
 
 ### Features
