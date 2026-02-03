@@ -52,7 +52,7 @@ log_info "Creating tmux session '$SESSION_NAME'..."
 
 # Window 0: LightOnOCR vLLM server
 tmux new-session -d -s "$SESSION_NAME" -n ocr
-tmux send-keys -t "$SESSION_NAME:ocr" "source ~/miniconda3/bin/activate lightonocr && cd $REPO_DIR && vllm serve lightonai/LightOnOCR-2-1B --host 0.0.0.0 --port 8000 --limit-mm-per-prompt '{\"image\": 1}' --mm-processor-cache-gb 0 --no-enable-prefix-caching --gpu-memory-utilization 0.85" Enter
+tmux send-keys -t "$SESSION_NAME:ocr" "source ~/miniconda3/bin/activate lightonocr && cd $REPO_DIR && vllm serve lightonai/LightOnOCR-2-1B --host 0.0.0.0 --port 8000 --limit-mm-per-prompt '{\"image\": 1}' --mm-processor-cache-gb 0 --no-enable-prefix-caching --gpu-memory-utilization 0.35" Enter
 
 # Window 1: Flask server
 tmux new-window -t "$SESSION_NAME" -n flask
