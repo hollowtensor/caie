@@ -50,15 +50,19 @@ fi
 
 log_info "Creating tmux session '$SESSION_NAME'..."
 
-# Window 0: LightOnOCR vLLM server
+# Window 0: LightOnOCR vLLM server (port 8000)
 tmux new-session -d -s "$SESSION_NAME" -n ocr
 tmux send-keys -t "$SESSION_NAME:ocr" "source ~/miniconda3/bin/activate lightonocr && cd $REPO_DIR && vllm serve lightonai/LightOnOCR-2-1B --host 0.0.0.0 --port 8000 --limit-mm-per-prompt '{\"image\": 1}' --mm-processor-cache-gb 0 --no-enable-prefix-caching --gpu-memory-utilization 0.35" Enter
 
-# Window 1: Flask server
+# Window 1: Qwen3-8B LLM server (port 8001)
+tmux new-window -t "$SESSION_NAME" -n llm
+tmux send-keys -t "$SESSION_NAME:llm" "cd ~/llama.cpp && ./build/bin/llama-server -hf Qwen/Qwen3-8B-GGUF -ngl 99 --host 0.0.0.0 --port 8001" Enter
+
+# Window 2: Flask server (port 5001)
 tmux new-window -t "$SESSION_NAME" -n flask
 tmux send-keys -t "$SESSION_NAME:flask" "source ~/miniconda3/bin/activate caie && cd $SERVER_DIR && PYTHONPATH=. python -m app" Enter
 
-# Window 2: Client dev server
+# Window 3: Client dev server (port 5173)
 tmux new-window -t "$SESSION_NAME" -n client
 tmux send-keys -t "$SESSION_NAME:client" "source ~/.nvm/nvm.sh && nvm use 22 && cd $CLIENT_DIR && npm run dev -- --host 0.0.0.0" Enter
 
@@ -78,8 +82,9 @@ echo "    tmux attach -t $SESSION_NAME"
 echo ""
 echo "  Switch windows:"
 echo "    Ctrl+b 0  - OCR server (port 8000)"
-echo "    Ctrl+b 1  - Flask server (port 5001)"
-echo "    Ctrl+b 2  - Client (port 5173)"
+echo "    Ctrl+b 1  - LLM server (port 8001)"
+echo "    Ctrl+b 2  - Flask server (port 5001)"
+echo "    Ctrl+b 3  - Client (port 5173)"
 echo ""
 echo "  Detach: Ctrl+b d"
 echo ""

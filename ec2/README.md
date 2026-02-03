@@ -34,20 +34,22 @@ chmod +x setup.sh
 |-----------|-------------|
 | **lightonocr** conda env | Python 3.11 + vLLM 0.15.0 + transformers 5.0.0 |
 | **caie** conda env | Python 3.11 + Flask + SQLAlchemy |
+| **llama.cpp** | For running Qwen3-8B-GGUF |
 | **Docker services** | PostgreSQL 16, Redis 7, Minio |
 | **Node.js** | Via nvm for client dev server |
 
 ## Services & Ports
 
-| Service | Port | Description |
-|---------|------|-------------|
-| LightOnOCR (vLLM) | 8000 | OCR model API |
-| Flask API | 5001 | Backend REST API |
-| Client (Vite) | 5173 | React frontend |
-| PostgreSQL | 5432 | Database |
-| Redis | 6379 | JWT token blacklist |
-| Minio API | 9000 | Object storage |
-| Minio Console | 9001 | Storage web UI |
+| Service | Port | Description | GPU Memory |
+|---------|------|-------------|------------|
+| LightOnOCR (vLLM) | 8000 | OCR model API | ~9 GB |
+| Qwen3-8B (llama-server) | 8001 | LLM for table correction | ~6 GB |
+| Flask API | 5001 | Backend REST API | - |
+| Client (Vite) | 5173 | React frontend | - |
+| PostgreSQL | 5432 | Database | - |
+| Redis | 6379 | JWT token blacklist | - |
+| Minio API | 9000 | Object storage | - |
+| Minio Console | 9001 | Storage web UI | - |
 
 ## Scripts
 
@@ -62,15 +64,26 @@ One-time setup script that:
 
 ### `start.sh`
 Starts all services in a tmux session:
-- Window `ocr`: vLLM server with LightOnOCR-2-1B
-- Window `flask`: Flask backend
-- Window `client`: Vite dev server
+- Window `ocr`: vLLM server with LightOnOCR-2-1B (port 8000)
+- Window `llm`: llama-server with Qwen3-8B-GGUF (port 8001)
+- Window `flask`: Flask backend (port 5001)
+- Window `client`: Vite dev server (port 5173)
 
 ### `stop.sh`
 Stops all services and the tmux session.
 
 ### `status.sh`
 Check the health of all services.
+
+### `start-llm.sh`
+Start just the LLM server (Qwen3-8B):
+```bash
+./start-llm.sh              # Foreground
+./start-llm.sh --background # In tmux
+```
+
+### `stop-llm.sh`
+Stop the LLM server.
 
 ## Tmux Session
 
@@ -81,9 +94,10 @@ All services run in a tmux session named `caie`.
 tmux attach -t caie
 
 # Switch windows
-Ctrl+b 0  # OCR server
-Ctrl+b 1  # Flask server
-Ctrl+b 2  # Client
+Ctrl+b 0  # OCR server (port 8000)
+Ctrl+b 1  # LLM server (port 8001)
+Ctrl+b 2  # Flask server (port 5001)
+Ctrl+b 3  # Client (port 5173)
 
 # Detach
 Ctrl+b d
@@ -100,6 +114,23 @@ MINIO_ENDPOINT=localhost:9000
 MINIO_ACCESS_KEY=minioadmin
 MINIO_SECRET_KEY=minioadmin
 LIGHTONOCR_SERVER_URL=http://localhost:8000/v1
+VLM_SERVER_URL=http://localhost:8001/v1
+VLM_MODEL=qwen3
+LLM_SERVER_URL=http://localhost:8001/v1
+LLM_MODEL=qwen3
+```
+
+## Qwen3 Reasoning Mode
+
+Qwen3-8B is a reasoning model that outputs thinking tokens. To disable reasoning, add `/no_think` to the system prompt:
+
+```json
+{
+  "messages": [
+    {"role": "system", "content": "You are a helpful assistant. /no_think"},
+    {"role": "user", "content": "Hello"}
+  ]
+}
 ```
 
 ## Troubleshooting

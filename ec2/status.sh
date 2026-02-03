@@ -110,6 +110,13 @@ else
     echo -e "  ${RED}✗${NC} LightOnOCR vLLM (port 8000)"
 fi
 
+# LLM Server (llama-server with Qwen3-8B)
+if curl -s --max-time 5 "http://localhost:8001/v1/models" | grep -q "qwen" 2>/dev/null; then
+    echo -e "  ${GREEN}✓${NC} Qwen3-8B llama-server (port 8001)"
+else
+    echo -e "  ${RED}✗${NC} Qwen3-8B llama-server (port 8001)"
+fi
+
 # Flask API
 if curl -s --max-time 5 "http://localhost:5001/api/auth/me" 2>/dev/null | grep -qE "(Unauthorized|user)"; then
     echo -e "  ${GREEN}✓${NC} Flask API (port 5001)"
