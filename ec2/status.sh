@@ -111,7 +111,7 @@ else
 fi
 
 # LLM Server (llama-server with Qwen3-8B)
-if curl -s --max-time 5 "http://localhost:8001/v1/models" | grep -q "qwen" 2>/dev/null; then
+if curl -s --max-time 5 "http://localhost:8001/v1/models" | grep -qi "qwen" 2>/dev/null; then
     echo -e "  ${GREEN}✓${NC} Qwen3-8B llama-server (port 8001)"
 else
     echo -e "  ${RED}✗${NC} Qwen3-8B llama-server (port 8001)"
