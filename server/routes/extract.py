@@ -397,8 +397,8 @@ def _is_numeric(v: str) -> bool:
 
 def _strip_markers(v: str) -> str:
     """Strip trailing stock/status markers from values for length comparison."""
-    # Common markers: ■ (stock item), * (footnote), etc.
-    return v.rstrip(" ■□*●○◆◇▪▫")
+    # Common markers: ■ (stock item), ✓ (check mark), * (footnote), etc.
+    return v.rstrip(" ■□*●○◆◇▪▫✓✔☑")
 
 
 def _percentile(sorted_vals: list[float], p: float) -> float:
