@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
-import { fetchUpload, resumeUpload, updateUpload } from './api'
+import { fetchUpload, resumeUpload, updateUpload, deleteUpload } from './api'
 import type { Upload } from './types'
 import { useAuth } from './contexts/AuthContext'
 import { useUploads } from './hooks/useUploads'
@@ -102,13 +102,15 @@ function HomePage() {
     setActiveUpload(u)
   }, [activeId, refresh])
 
-  const handleDelete = useCallback(() => {
+  const handleDelete = useCallback(async () => {
     if (activeId) {
+      if (!confirm('Delete this upload?')) return
+      await deleteUpload(activeId)
       setActiveId(null)
       setActivePage(null)
       setActiveUpload(null)
+      refresh()
     }
-    refresh()
   }, [activeId, refresh])
 
   const left = (
@@ -133,7 +135,7 @@ function HomePage() {
           onReparse={handleReparse}
         />
       )}
-      <ProgressCard status={status} upload={activeUpload} uploadId={activeId} onResume={handleResume} />
+      <ProgressCard status={status} upload={activeUpload} uploadId={activeId} onResume={handleResume} onDelete={handleDelete} />
       {activePage && activeId && (
         <MarkdownViewer uploadId={activeId} pageNum={activePage} />
       )}
