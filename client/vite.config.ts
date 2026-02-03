@@ -10,5 +10,6 @@ export default defineConfig({
       '/upload': 'http://localhost:5001',
       '/pages': 'http://localhost:5001',
     },
+    allowedHosts: ['caie.hashteelabs.com', 'localhost'],
   },
 })
