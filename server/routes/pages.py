@@ -254,6 +254,7 @@ def _call_vlm(uid: str, page_num: int, heading: str) -> str:
     payload = {
         "model": VLM_MODEL,
         "messages": [
+            {"role": "system", "content": "You are an OCR table extraction assistant. Reasoning: disabled"},
             {
                 "role": "user",
                 "content": [
@@ -407,11 +408,15 @@ def _call_llm(page_markdown: str, table_html: str, heading: str) -> str:
         "4. Preserve ALL cell text values exactly. Do not change, reorder, or remove any data.\n"
         "5. Use <thead>/<tbody> properly.\n\n"
         "Output ONLY the fixed <table>...</table> HTML. No explanation, no markdown fences.\n"
+        "Do not provide chain-of-thought or reasoning. Provide only the final answer.\n"
     )
 
     payload = {
         "model": LLM_MODEL,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": [
+            {"role": "system", "content": "You are an HTML table correction assistant. Reasoning: disabled"},
+            {"role": "user", "content": prompt},
+        ],
         "max_tokens": 8192,
         "temperature": 0.0,
         "stream": False,

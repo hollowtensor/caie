@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import argparse
 import os
+import warnings
 from datetime import timedelta
+
+# Suppress multiprocessing resource tracker warnings on shutdown
+warnings.filterwarnings("ignore", message="resource_tracker:.*semaphore")
 
 from dotenv import load_dotenv
 from flask import Flask

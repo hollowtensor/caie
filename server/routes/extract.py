@@ -423,13 +423,13 @@ def _profile_column(values: list[str]) -> dict:
     )
     numeric_count = sum(1 for v in values if _is_numeric(v))
     freq = Counter(v.lower().rstrip("*") for v in values)
-    common_threshold = max(5, len(values) * 0.01)
+    common_threshold = max(3, len(values) * 0.005)
 
     q1_len = _percentile(lengths, 25)
     q3_len = _percentile(lengths, 75)
     iqr_len = q3_len - q1_len
-    lower_len = max(q1_len - 1.5 * iqr_len, 1)
-    upper_len = q3_len + 1.5 * iqr_len
+    lower_len = max(q1_len - 2.5 * iqr_len, 1)
+    upper_len = q3_len + 2.5 * iqr_len
 
     median_dr = _percentile(digit_ratios, 50)
 
@@ -471,7 +471,7 @@ def _check_cell(value: str, profile: dict) -> str | None:
         return f"unusual length ({vlen} chars, expected {int(lower)}-{int(upper)})"
 
     dr = sum(c.isdigit() for c in value) / max(len(value), 1)
-    if abs(dr - profile["digit_ratio_median"]) > 0.5:
+    if abs(dr - profile["digit_ratio_median"]) > 0.7:
         return "unusual character pattern"
 
     return None
