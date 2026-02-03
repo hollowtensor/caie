@@ -55,8 +55,9 @@ tmux new-session -d -s "$SESSION_NAME" -n ocr
 tmux send-keys -t "$SESSION_NAME:ocr" "source ~/miniconda3/bin/activate lightonocr && cd $REPO_DIR && vllm serve lightonai/LightOnOCR-2-1B --host 0.0.0.0 --port 8000 --limit-mm-per-prompt '{\"image\": 1}' --mm-processor-cache-gb 0 --no-enable-prefix-caching --gpu-memory-utilization 0.35" Enter
 
 # Window 1: Qwen3-8B LLM server (port 8001)
+# Context: 16384 tokens (Qwen3-8B supports up to 40960)
 tmux new-window -t "$SESSION_NAME" -n llm
-tmux send-keys -t "$SESSION_NAME:llm" "cd ~/llama.cpp && ./build/bin/llama-server -hf Qwen/Qwen3-8B-GGUF -ngl 99 --host 0.0.0.0 --port 8001" Enter
+tmux send-keys -t "$SESSION_NAME:llm" "cd ~/llama.cpp && ./build/bin/llama-server -hf Qwen/Qwen3-8B-GGUF -ngl 99 --host 0.0.0.0 --port 8001 -c 16384" Enter
 
 # Window 2: Flask server (port 5001)
 tmux new-window -t "$SESSION_NAME" -n flask

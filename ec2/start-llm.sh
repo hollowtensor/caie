@@ -19,6 +19,7 @@ MODEL="Qwen/Qwen3-8B-GGUF"
 HOST="0.0.0.0"
 PORT="8001"
 GPU_LAYERS="99"  # Offload all layers to GPU
+CONTEXT_SIZE="16384"  # Qwen3-8B supports up to 40960
 
 # Colors
 GREEN='\033[0;32m'
@@ -61,13 +62,13 @@ if [ "$BACKGROUND" = true ]; then
     fi
 
     tmux new-window -t caie -n llm
-    tmux send-keys -t caie:llm "cd ~/llama.cpp && $LLAMA_SERVER -hf $MODEL -ngl $GPU_LAYERS --host $HOST --port $PORT" Enter
+    tmux send-keys -t caie:llm "cd ~/llama.cpp && $LLAMA_SERVER -hf $MODEL -ngl $GPU_LAYERS --host $HOST --port $PORT -c $CONTEXT_SIZE" Enter
 
     log_info "LLM server starting in tmux window 'llm'"
     log_info "Attach with: tmux attach -t caie"
 else
     # Start in foreground
-    log_info "Starting Qwen3-8B-GGUF on port $PORT..."
+    log_info "Starting Qwen3-8B-GGUF on port $PORT with context $CONTEXT_SIZE..."
     cd ~/llama.cpp
-    exec "$LLAMA_SERVER" -hf "$MODEL" -ngl "$GPU_LAYERS" --host "$HOST" --port "$PORT"
+    exec "$LLAMA_SERVER" -hf "$MODEL" -ngl "$GPU_LAYERS" --host "$HOST" --port "$PORT" -c "$CONTEXT_SIZE"
 fi
