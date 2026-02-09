@@ -34,14 +34,13 @@ export function RegisterPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gray-100">
-      <div className="w-full max-w-sm rounded-lg bg-white p-8 shadow-md">
-        <div className="mb-6 text-center">
-          <h1 className="text-xl font-bold text-gray-900">CAIE</h1>
-          <p className="text-sm text-gray-500">Context Aware Information Extraction</p>
+    <div className="flex min-h-screen flex-col items-center justify-center bg-[#f0f4f8]">
+      <div className="w-full max-w-sm rounded-xl bg-white p-8 shadow-lg">
+        <div className="mb-8 flex justify-center">
+          <img src="/lklogo.png" alt="Lauritz Knudsen" className="h-28 object-contain" />
         </div>
 
-        <h2 className="mb-6 text-center text-lg font-medium text-gray-800">Create Account</h2>
+        <h2 className="mb-6 text-center text-lg font-semibold text-[#1a6298]">Create Account</h2>
 
         {error && (
           <div className="mb-4 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-600">
@@ -60,7 +59,7 @@ export function RegisterPage() {
               value={name}
               onChange={(e) => setName(e.target.value)}
               required
-              className="w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#1a6298] focus:outline-none focus:ring-1 focus:ring-[#1a6298]"
               placeholder="Your name"
             />
           </div>
@@ -75,7 +74,7 @@ export function RegisterPage() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
-              className="w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#1a6298] focus:outline-none focus:ring-1 focus:ring-[#1a6298]"
               placeholder="you@example.com"
             />
           </div>
@@ -91,7 +90,7 @@ export function RegisterPage() {
               onChange={(e) => setPassword(e.target.value)}
               required
               minLength={6}
-              className="w-full rounded border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#1a6298] focus:outline-none focus:ring-1 focus:ring-[#1a6298]"
               placeholder="At least 6 characters"
             />
           </div>
@@ -99,7 +98,7 @@ export function RegisterPage() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full rounded bg-blue-600 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:bg-blue-400"
+            className="w-full rounded-lg bg-[#1a6298] py-2.5 text-sm font-medium text-white transition-colors hover:bg-[#154f7a] disabled:bg-[#7bacc8]"
           >
             {loading ? 'Creating account...' : 'Create Account'}
           </button>
@@ -107,11 +106,12 @@ export function RegisterPage() {
 
         <p className="mt-6 text-center text-sm text-gray-600">
           Already have an account?{' '}
-          <Link to="/login" className="font-medium text-blue-600 hover:underline">
+          <Link to="/login" className="font-medium text-[#1a6298] hover:underline">
             Sign In
           </Link>
         </p>
       </div>
+      <p className="mt-4 text-xs text-gray-400">powered by Hashtee Lab</p>
     </div>
   )
 }

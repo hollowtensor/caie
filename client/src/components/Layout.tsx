@@ -10,8 +10,8 @@ function Header() {
     <header className="flex h-14 items-center justify-between border-b border-gray-200 bg-white px-4">
       {/* Left: Logo + Workspace */}
       <div className="flex items-center gap-4">
-        <Link to="/" className="text-lg font-bold text-gray-900">
-          CAIE
+        <Link to="/" className="flex items-center">
+          <img src="/lklogo.png" alt="Lauritz Knudsen" className="h-9 object-contain" />
         </Link>
         <div className="h-6 w-px bg-gray-200" />
         <WorkspaceSelector />
