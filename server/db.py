@@ -1,7 +1,18 @@
 from __future__ import annotations
 
+import re
+
 from extensions import db
 from models import Upload, Page, Schema as SchemaModel
+
+_URL_RE = re.compile(r"https?://[^\s'\"]+")
+
+
+def _scrub(text: str | None) -> str | None:
+    """Strip internal URLs from any text shown to clients."""
+    if not text:
+        return text
+    return _URL_RE.sub("<server>", text)
 
 
 def init_db():
@@ -22,7 +33,7 @@ def _upload_to_dict(u: Upload) -> dict:
         "month": u.month,
         "pdf_path": u.pdf_path,
         "state": u.state,
-        "message": u.message,
+        "message": _scrub(u.message),
         "total_pages": u.total_pages,
         "current_page": u.current_page,
         "extract_state": u.extract_state,
@@ -114,7 +125,7 @@ def _page_to_dict(p: Page) -> dict:
         "page_num": p.page_num,
         "markdown": p.markdown,
         "state": p.state,
-        "error": p.error,
+        "error": _scrub(p.error),
     }
 
 

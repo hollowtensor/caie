@@ -484,7 +484,9 @@ def validate_table(uid: str, page_num: int):
             corrected_html = _call_vlm(uid, page_num, heading)
     except Exception as e:
         log.exception("%s call failed", method.upper())
-        return jsonify({"error": f"{method.upper()} error: {e}"}), 502
+        import re as _re
+        sanitized = _re.sub(r"https?://[^\s'\"]+", "<server>", str(e))
+        return jsonify({"error": f"{method.upper()} error: {sanitized}"}), 502
 
     return jsonify({
         "original": original_html,

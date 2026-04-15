@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import re
 import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -12,6 +13,16 @@ from flask import Flask
 from PIL import Image
 
 import storage
+
+# ---------- Error sanitization ----------
+_URL_RE = re.compile(r"https?://[^\s'\"]+")
+
+
+def _sanitize_error(e: Exception) -> str:
+    """Strip internal URLs from error messages shown to users."""
+    msg = str(e)
+    return _URL_RE.sub("<server>", msg)
+
 
 # ---------- Vision model constants ----------
 MODEL_ID = "lightonai/LightOnOCR-2-1B"
@@ -139,7 +150,7 @@ def run_parse_job(uid: str, server_url: str, app: Flask):
                     db_create_pages(uid, list(range(1, total + 1)))
                     db_update(uid, message=f"Rendered {total} pages")
                 except Exception as e:
-                    db_update(uid, state="error", message=f"Render failed: {e}")
+                    db_update(uid, state="error", message=f"Render failed: {_sanitize_error(e)}")
                     return
             else:
                 # Image upload — pages already saved to Minio
@@ -167,7 +178,7 @@ def run_parse_job(uid: str, server_url: str, app: Flask):
                         db_update_page_done(uid, page_num, markdown)
                 except Exception as e:
                     with app.app_context():
-                        db_update_page_error(uid, page_num, str(e))
+                        db_update_page_error(uid, page_num, _sanitize_error(e))
                 with lock:
                     done_count += 1
                     with app.app_context():
@@ -246,7 +257,7 @@ def resume_parse_job(uid: str, server_url: str, app: Flask):
                         db_update_page_done(uid, page_num, markdown)
                 except Exception as e:
                     with app.app_context():
-                        db_update_page_error(uid, page_num, str(e))
+                        db_update_page_error(uid, page_num, _sanitize_error(e))
                 with lock:
                     done_count += 1
                     with app.app_context():
