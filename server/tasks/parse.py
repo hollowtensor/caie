@@ -32,19 +32,26 @@ def render_pdf_page(page, max_res: int = MAX_RESOLUTION, scale: float = PDF_SCAL
     return img
 
 
-def render_pdf_from_bytes(pdf_bytes: bytes) -> list[Image.Image]:
-    """Render PDF pages from bytes using a temporary file."""
+def render_and_save_pdf(uid: str, pdf_bytes: bytes, on_page=None) -> int:
+    """Render PDF pages one at a time, saving each to Minio immediately to conserve memory.
+    Returns the total number of pages. Calls on_page(page_num, total) after each save."""
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=True) as tmp:
         tmp.write(pdf_bytes)
         tmp.flush()
         pdf = pdfium.PdfDocument(tmp.name)
-        images = []
-        for i in range(len(pdf)):
+        total = len(pdf)
+        for i in range(total):
             page = pdf[i]
-            images.append(render_pdf_page(page))
+            img = render_pdf_page(page)
             page.close()
+            buf = BytesIO()
+            img.save(buf, format="PNG")
+            storage.upload_page_image(uid, i + 1, buf.getvalue())
+            del img, buf
+            if on_page:
+                on_page(i + 1, total)
         pdf.close()
-    return images
+    return total
 
 
 # ---------- Vision API ----------
@@ -120,18 +127,14 @@ def run_parse_job(uid: str, server_url: str, app: Flask):
                 try:
                     db_update(uid, state="rendering", message="Rendering PDF pages...")
 
-                    # Download PDF from Minio and render
                     pdf_bytes = storage.get_pdf(uid)
-                    images = render_pdf_from_bytes(pdf_bytes)
-                    total = len(images)
 
-                    db_update(uid, total_pages=total, message=f"Saving {total} page images...")
+                    def _on_page(page_num, total):
+                        db_update(uid, total_pages=total,
+                                  message=f"Rendered page {page_num}/{total}")
 
-                    # Save page images to Minio
-                    for i, img in enumerate(images, start=1):
-                        buf = BytesIO()
-                        img.save(buf, format="PNG")
-                        storage.upload_page_image(uid, i, buf.getvalue())
+                    total = render_and_save_pdf(uid, pdf_bytes, on_page=_on_page)
+                    del pdf_bytes
 
                     db_create_pages(uid, list(range(1, total + 1)))
                     db_update(uid, message=f"Rendered {total} pages")
@@ -146,23 +149,20 @@ def run_parse_job(uid: str, server_url: str, app: Flask):
                     db_update(uid, state="error", message="No page images found")
                     return
 
-                # Load images from Minio
-                images = []
-                for i in range(1, total + 1):
-                    img_bytes = storage.get_page_image(uid, i)
-                    images.append(Image.open(BytesIO(img_bytes)))
+                db_update(uid, total_pages=total, message=f"Found {total} images")
 
-                db_update(uid, total_pages=total, message=f"Loaded {total} images")
-
-            # Step 2: Parse pages concurrently
+            # Step 2: Parse pages concurrently (load each image on demand)
             db_update(uid, state="parsing", message=f"Starting parse ({PARSE_WORKERS} workers)...")
             done_count = 0
             lock = threading.Lock()
 
-            def _parse_one(page_num, img):
+            def _parse_one(page_num):
                 nonlocal done_count
                 try:
+                    img_bytes = storage.get_page_image(uid, page_num)
+                    img = Image.open(BytesIO(img_bytes))
                     markdown = parse_page(img, server_url)
+                    del img, img_bytes
                     with app.app_context():
                         db_update_page_done(uid, page_num, markdown)
                 except Exception as e:
@@ -176,8 +176,8 @@ def run_parse_job(uid: str, server_url: str, app: Flask):
 
             with ThreadPoolExecutor(max_workers=PARSE_WORKERS) as pool:
                 futures = {
-                    pool.submit(_parse_one, i + 1, img): i + 1
-                    for i, img in enumerate(images)
+                    pool.submit(_parse_one, i + 1): i + 1
+                    for i in range(total)
                 }
                 for fut in as_completed(futures):
                     fut.result()
@@ -220,13 +220,6 @@ def resume_parse_job(uid: str, server_url: str, app: Flask):
                 run_parse_job(uid, server_url, app)
                 return
 
-            # Load images from Minio
-            images = {}
-            for i in range(1, total + 1):
-                if storage.page_image_exists(uid, i):
-                    img_bytes = storage.get_page_image(uid, i)
-                    images[i] = Image.open(BytesIO(img_bytes))
-
             pending = db_get_pending_page_nums(uid)
             db_reset_error_pages(uid)
 
@@ -242,10 +235,13 @@ def resume_parse_job(uid: str, server_url: str, app: Flask):
             done_count = already_done
             lock = threading.Lock()
 
-            def _parse_one(page_num, img):
+            def _parse_one(page_num):
                 nonlocal done_count
                 try:
+                    img_bytes = storage.get_page_image(uid, page_num)
+                    img = Image.open(BytesIO(img_bytes))
                     markdown = parse_page(img, server_url)
+                    del img, img_bytes
                     with app.app_context():
                         db_update_page_done(uid, page_num, markdown)
                 except Exception as e:
@@ -259,8 +255,8 @@ def resume_parse_job(uid: str, server_url: str, app: Flask):
 
             with ThreadPoolExecutor(max_workers=PARSE_WORKERS) as pool:
                 futures = {
-                    pool.submit(_parse_one, pn, images[pn]): pn
-                    for pn in pending if pn in images
+                    pool.submit(_parse_one, pn): pn
+                    for pn in pending if storage.page_image_exists(uid, pn)
                 }
                 for fut in as_completed(futures):
                     fut.result()
