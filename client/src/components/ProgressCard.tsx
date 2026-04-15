@@ -16,7 +16,8 @@ export function ProgressCard({ status, upload, uploadId, onResume, onDelete }: P
   const pct = s.total_pages > 0 ? Math.round((s.current_page / s.total_pages) * 100) : 0
   const isDone = s.state === 'done'
   const isError = s.state === 'error'
-  const isStale = !status && !isDone && s.state !== 'queued'
+  const isActive = s.state === 'rendering' || s.state === 'parsing'
+  const isStale = !status && !isDone && !isActive && s.state !== 'queued'
 
   // Extraction state from SSE or upload object
   const extractState = ('extract_state' in s ? s.extract_state : null) as string | null
