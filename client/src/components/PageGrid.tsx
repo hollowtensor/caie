@@ -58,7 +58,7 @@ export function PageGrid({ uploadId, activePage, onSelectPage, refreshKey }: Pro
               className={`relative aspect-[0.707] cursor-pointer overflow-hidden rounded border-2 transition-colors
                 ${activePage === num ? 'border-blue-500' : BORDER[st] || BORDER.pending}
                 hover:border-blue-300`}>
-              <img src={`/pages/${uploadId}/${f}`} loading="lazy"
+              <img src={`/pages/${uploadId}/page_${String(num).padStart(3, '0')}_thumb.jpg`} loading="lazy"
                 className="h-full w-full object-cover" alt={`Page ${num}`} />
               {st === 'pending' && (
                 <div className="absolute inset-0 bg-white/50" />

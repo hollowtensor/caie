@@ -23,12 +23,28 @@ bp = Blueprint("pages", __name__)
 
 @bp.route("/pages/<uid>/<filename>")
 def serve_page(uid: str, filename: str):
-    """Serve page image from Minio. No auth required - UUID provides security."""
-    # Verify upload exists (no workspace check - images are public by UUID)
+    """Serve page image or thumbnail from Minio. No auth required - UUID provides security."""
     u = db_get(uid)
     if not u:
         return jsonify({"error": "Not found"}), 404
 
+    # Thumbnail: page_001_thumb.jpg
+    thumb_match = re.match(r"page_(\d+)_thumb\.jpg", filename)
+    if thumb_match:
+        page_num = int(thumb_match.group(1))
+        try:
+            data = storage.get_page_thumbnail(uid, page_num)
+            return Response(data, mimetype="image/jpeg",
+                            headers={"Cache-Control": "public, max-age=86400"})
+        except Exception:
+            # Fallback to full image if thumbnail doesn't exist
+            try:
+                data = storage.get_page_image(uid, page_num)
+                return Response(data, mimetype="image/png")
+            except Exception:
+                return jsonify({"error": "Page not found"}), 404
+
+    # Full image: page_001.png
     match = re.match(r"page_(\d+)\.png", filename)
     if not match:
         return jsonify({"error": "Invalid filename"}), 400

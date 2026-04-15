@@ -68,10 +68,15 @@ def delete_pdf(uid: str) -> bool:
 
 # ---------- Page image storage ----------
 
+THUMB_WIDTH = 150
+
+
 def upload_page_image(uid: str, page_num: int, data: bytes) -> str:
-    """Store a page PNG image. Returns the object key."""
-    key = f"{uid}/page_{page_num:03d}.png"
+    """Store a page PNG image and its JPEG thumbnail. Returns the object key."""
     client = get_client()
+
+    # Full-size PNG
+    key = f"{uid}/page_{page_num:03d}.png"
     client.put_object(
         config.MINIO_BUCKET_PAGES,
         key,
@@ -79,12 +84,43 @@ def upload_page_image(uid: str, page_num: int, data: bytes) -> str:
         len(data),
         content_type="image/png",
     )
+
+    # Generate and store thumbnail
+    from PIL import Image
+    img = Image.open(BytesIO(data))
+    ratio = THUMB_WIDTH / img.width
+    thumb = img.resize(
+        (THUMB_WIDTH, int(img.height * ratio)),
+        Image.LANCZOS,
+    )
+    buf = BytesIO()
+    thumb.save(buf, format="JPEG", quality=70)
+    thumb_bytes = buf.getvalue()
+    thumb_key = f"{uid}/page_{page_num:03d}_thumb.jpg"
+    client.put_object(
+        config.MINIO_BUCKET_PAGES,
+        thumb_key,
+        BytesIO(thumb_bytes),
+        len(thumb_bytes),
+        content_type="image/jpeg",
+    )
+
     return key
 
 
 def get_page_image(uid: str, page_num: int) -> bytes:
     """Retrieve a page image."""
     key = f"{uid}/page_{page_num:03d}.png"
+    resp = get_client().get_object(config.MINIO_BUCKET_PAGES, key)
+    data = resp.read()
+    resp.close()
+    resp.release_conn()
+    return data
+
+
+def get_page_thumbnail(uid: str, page_num: int) -> bytes:
+    """Retrieve a page thumbnail JPEG."""
+    key = f"{uid}/page_{page_num:03d}_thumb.jpg"
     resp = get_client().get_object(config.MINIO_BUCKET_PAGES, key)
     data = resp.read()
     resp.close()
@@ -103,7 +139,7 @@ def page_image_exists(uid: str, page_num: int) -> bool:
 
 
 def list_page_images(uid: str) -> list[str]:
-    """List page image filenames for an upload."""
+    """List page image filenames for an upload (excludes thumbnails)."""
     objects = get_client().list_objects(
         config.MINIO_BUCKET_PAGES, prefix=f"{uid}/"
     )

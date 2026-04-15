@@ -26,7 +26,10 @@ def render_pdf_page(page, max_res: int = MAX_RESOLUTION, scale: float = PDF_SCAL
     w, h = page.get_size()
     pw, ph = w * scale, h * scale
     factor = min(1, max_res / pw, max_res / ph)
-    return page.render(scale=scale * factor, rev_byteorder=True).to_pil()
+    bitmap = page.render(scale=scale * factor, rev_byteorder=True)
+    img = bitmap.to_pil().copy()  # .copy() ensures PIL owns its memory before pdfium frees it
+    bitmap.close()
+    return img
 
 
 def render_pdf_from_bytes(pdf_bytes: bytes) -> list[Image.Image]:
@@ -35,7 +38,11 @@ def render_pdf_from_bytes(pdf_bytes: bytes) -> list[Image.Image]:
         tmp.write(pdf_bytes)
         tmp.flush()
         pdf = pdfium.PdfDocument(tmp.name)
-        images = [render_pdf_page(pdf[i]) for i in range(len(pdf))]
+        images = []
+        for i in range(len(pdf)):
+            page = pdf[i]
+            images.append(render_pdf_page(page))
+            page.close()
         pdf.close()
     return images
 
