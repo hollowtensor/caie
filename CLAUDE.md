@@ -4,135 +4,130 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-CAIE (Context-Aware Information Extraction) is a full-stack app for extracting structured data from PDF pricelists using OCR and LLMs. Features workspace-based multi-tenancy with user authentication (JWT), PostgreSQL database, Minio object storage, and Redis for token management.
+CAIE (Context-Aware Information Extraction) is a full-stack app for extracting structured data from PDF pricelists using OCR and LLMs. Features workspace-based multi-tenancy with JWT auth, PostgreSQL, Minio object storage, and Redis for token blacklisting.
 
 ## Development Commands
 
-### Docker services (Postgres, Redis, Minio, Server)
+### Local dev (ports shifted to avoid conflicts with other projects)
 
 ```bash
-# Start all services
-docker compose up -d
+# Start infra with dev port overrides (Postgres:5434, Redis:6381, Minio:9004/9005)
+cd server
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d postgres redis minio
 
-# Start only infrastructure (run Flask locally)
-docker compose up -d postgres redis minio
+# Run Flask (from server/ directory, needs PYTHONPATH)
+source ../.venv/bin/activate
+PYTHONPATH=. FLASK_APP=app flask db upgrade
+python -m app --port 5001
 
-# View logs
-docker compose logs -f server
-
-# Stop all
-docker compose down
-```
-
-### Running Flask locally (against Docker services)
-
-```bash
-source .venv/bin/activate
-flask db upgrade  # Run migrations
-python -m server.app --server-url https://<pod-id>-8000.proxy.runpod.net/v1
-```
-
-### Client (runs locally, proxies to Flask)
-
-```bash
+# Client (use --port if 5173 is taken)
 cd client
-npm install          # install dependencies
-npm run dev          # dev server with HMR (port 5173)
-npm run build        # tsc + vite build
+npm install
+npm run dev          # or: npx vite --port 5174
+npm run build        # tsc + vite build (use `npx vite build` to skip tsc)
 npm run lint         # eslint
+```
+
+### Production (EC2 at caie.hashteelabs.com)
+
+```bash
+# SSH alias: ssh caie-cpu
+# Infra runs via standard docker-compose.yml (default ports)
+cd ~/caie/server && docker compose up -d postgres redis minio
+
+# Flask runs in tmux session
+tmux new-session -d -s caie 'source ~/caie/.venv/bin/activate && cd ~/caie/server && python -m app --host 0.0.0.0 --port 5001'
+tmux attach -t caie   # view logs
+
+# Rebuild client after changes
+cd ~/caie/client && npx vite build
+
+# Nginx serves client dist + proxies /api /upload /pages to Flask
+# HTTPS via Let's Encrypt (auto-renew via certbot timer)
+```
+
+### Deploying changes
+
+```bash
+# Push from local (requires hollowtensor GitHub account)
+gh auth switch --user hollowtensor
+git push origin main
+
+# On EC2
+ssh caie-cpu
+cd ~/caie && git pull origin main
+# Rebuild client if frontend changed:
+cd client && npx vite build
+# Restart Flask if backend changed:
+tmux kill-session -t caie
+tmux new-session -d -s caie 'source ~/caie/.venv/bin/activate && cd ~/caie/server && python -m app --host 0.0.0.0 --port 5001'
 ```
 
 ### Database migrations
 
 ```bash
-flask db init        # first time only
-flask db migrate -m "description"  # generate migration
-flask db upgrade     # apply migrations
-flask db downgrade   # rollback
+PYTHONPATH=. FLASK_APP=app flask db migrate -m "description"  # generate
+PYTHONPATH=. FLASK_APP=app flask db upgrade                   # apply
+PYTHONPATH=. FLASK_APP=app flask db downgrade                 # rollback
 ```
+
+Migrations live in `server/migrations/`. Models must be imported in `app.py` for Alembic to detect them (the `import models` in `create_app` handles this).
 
 ## Architecture
 
-**Frontend**: React 19 + TypeScript + Vite + Tailwind CSS 4. Uses TanStack Table, react-router-dom v7, react-markdown. Auth state managed via AuthContext.
+**Frontend**: React 19 + TypeScript + Vite + Tailwind CSS 4. TanStack Table for data grids. react-router-dom v7 for routing. Auth state in `AuthContext`.
 
-**Backend**: Flask with Blueprints, Flask-SQLAlchemy, Flask-Migrate (Alembic), Flask-JWT-Extended. PostgreSQL database, Minio S3-compatible storage, Redis for JWT blacklisting.
+**Backend**: Flask with Blueprints (`server/routes/`), Flask-SQLAlchemy, Flask-Migrate, Flask-JWT-Extended. Six blueprints: auth, workspaces, uploads, pages, extract, compare.
 
-**Authentication**: JWT access + refresh tokens. All routes (except auth endpoints) require `@auth_required` or `@workspace_required` decorator. SSE endpoint accepts token via query param.
+**Storage**: Minio (S3-compatible) with three buckets: `caie-pdfs` (originals), `caie-pages` (rendered PNGs + JPEG thumbnails), `caie-output` (extracted CSVs). Abstracted in `server/storage.py`.
 
-**Multi-tenancy**: Workspace model. Users belong to workspaces via WorkspaceMember (owner/member roles). All data (uploads, schemas) scoped to workspace via `X-Workspace-Id` header.
+**Auth flow**: JWT access + refresh tokens. Redis-backed token blocklist for logout. Two decorators in `server/auth.py`: `@auth_required` (sets `g.current_user`) and `@workspace_required` (also validates `X-Workspace-Id` header, sets `g.workspace`). SSE endpoint takes token via query param since EventSource can't set headers.
+
+**Multi-tenancy**: All data scoped to workspace. Client sends `X-Workspace-Id` header on every API call (see `authFetch()` in `client/src/api.ts`). Users belong to workspaces via `WorkspaceMember` with owner/member roles.
 
 ### Key data flow
 
-1. User registers/logs in → JWT tokens issued → personal workspace created
-2. Upload PDF → stored in Minio (`caie-pdfs` bucket) → record created in PostgreSQL with workspace_id
-3. Background thread renders pages to PNG (Minio `caie-pages`), OCRs concurrently via LightOnOCR
-4. SSE streams progress to client (auth via query param token)
-5. User creates extraction schema → rows extracted via anchor matching → CSV to Minio (`caie-output`)
-6. Optional VLM/LLM validation for table correction
+1. User registers → JWT issued → personal workspace auto-created
+2. Upload PDF → stored in Minio → PostgreSQL record created with workspace_id
+3. Background thread (`server/tasks/parse.py`) renders pages **one at a time** to PNG + thumbnail, uploads each to Minio immediately (memory-safe for low-RAM instances)
+4. Parse workers load images on demand from Minio (not pre-loaded) and OCR concurrently via LightOnOCR vLLM endpoint
+5. SSE streams progress to client (auto-reconnects on disconnect)
+6. On startup, `_auto_extract_pending()` in `app.py` runs extraction for any uploads in "done" state without extractions
+7. User creates extraction schema → rows extracted via anchor matching → CSV stored in Minio
+8. Optional VLM/LLM validation for table correction (configurable model endpoints)
 
-### Server structure
+### Important patterns
 
-- `server/app.py` — Flask factory, JWT setup, migration init
-- `server/extensions.py` — Flask-SQLAlchemy, Migrate, JWT instances
-- `server/models.py` — SQLAlchemy models (User, Workspace, WorkspaceMember, Upload, Page, Schema)
-- `server/config.py` — All env vars (DATABASE_URL, REDIS_URL, MINIO_*, JWT_*)
-- `server/db.py` — SQLAlchemy-backed helper functions (compatibility layer)
-- `server/auth.py` — `@auth_required`, `@workspace_required` decorators
-- `server/storage.py` — Minio storage abstraction (upload/get/delete for PDFs, pages, CSVs)
-- `server/routes/auth.py` — Register, login, refresh, logout, me endpoints
-- `server/routes/workspaces.py` — Workspace CRUD, member management, invite
-- `server/routes/uploads.py` — Upload CRUD, SSE status (workspace-scoped)
-- `server/routes/pages.py` — Page serving from Minio, VLM/LLM validation
-- `server/routes/extract.py` — Schema CRUD, extraction, CSV download
-- `server/tasks/parse.py` — Background OCR job (app context for threads)
-
-### Client structure
-
-- `client/src/api.ts` — `authFetch()` wrapper, token management, all API calls
-- `client/src/contexts/AuthContext.tsx` — Auth state, login/register/logout, workspace switching
-- `client/src/pages/LoginPage.tsx`, `RegisterPage.tsx` — Auth forms
-- `client/src/components/WorkspaceSelector.tsx` — Workspace dropdown in header
-- `client/src/components/Layout.tsx` — Two-panel layout with auth UI
-- `client/src/App.tsx` — Routes with `<ProtectedRoute>` wrapper
-- `client/src/hooks/useSSE.ts` — EventSource with auth token query param
-
-### Database tables
-
-- **users** — id, email, password_hash, name
-- **workspaces** — id, name, owner_id
-- **workspace_members** — workspace_id, user_id, role (owner/member)
-- **uploads** — id, workspace_id, user_id, filename, company, state, etc.
-- **pages** — upload_id, page_num, markdown, state, error
-- **schemas** — id, workspace_id, company, name, fields (JSON), is_default
+- **Memory-safe rendering**: `render_and_save_pdf()` renders one page at a time to avoid OOM on low-memory instances. Parse workers also load images on demand from Minio.
+- **Thumbnails**: `storage.upload_page_image()` generates a 150px-wide JPEG thumbnail alongside each full PNG. PageGrid loads thumbnails; full images load on page select. Thumbnail endpoint falls back to full image if thumbnail doesn't exist.
+- **Error sanitization**: Internal URLs (RunPod, localhost, etc.) are stripped from all client-facing errors. `_sanitize_error()` in `parse.py` at write time, `_scrub()` in `db.py` at read time. **Never expose OCR/VLM/LLM endpoint URLs to the frontend.**
+- **SSE reconnection**: `useSSE.ts` auto-reconnects after 2s on disconnect. `ProgressCard.tsx` treats `rendering`/`parsing` states as active (not "Interrupted") even if SSE is temporarily disconnected.
+- **Background OCR tasks** run in threads with their own Flask app context (see `parse.py`). They need `app.app_context()` to access the DB.
+- **`server/db.py`** is a compatibility layer wrapping SQLAlchemy queries in function-based helpers. New code should use SQLAlchemy models directly.
+- **Vite proxy** is configured in `client/vite.config.ts` — also includes `allowedHosts` for the `caie.hashteelabs.com` domain.
 
 ### Environment variables
 
+All defined in `server/config.py` with defaults. Key ones beyond the basics:
+
 | Variable | Default | Purpose |
 |---|---|---|
-| `DATABASE_URL` | `postgresql://caie:caie_dev@localhost:5432/caie` | PostgreSQL connection |
-| `REDIS_URL` | `redis://localhost:6379/0` | Redis for JWT blacklisting |
-| `MINIO_ENDPOINT` | `localhost:9000` | Minio S3 endpoint |
-| `MINIO_ACCESS_KEY` | `minioadmin` | Minio access key |
-| `MINIO_SECRET_KEY` | `minioadmin` | Minio secret key |
-| `MINIO_SECURE` | `false` | Use HTTPS for Minio |
-| `JWT_SECRET_KEY` | `change-me-in-production` | JWT signing key |
-| `JWT_ACCESS_TOKEN_EXPIRES` | `900` (15 min) | Access token TTL in seconds |
-| `JWT_REFRESH_TOKEN_EXPIRES` | `2592000` (30 days) | Refresh token TTL |
+| `DATABASE_URL` | `postgresql://caie:caie_dev@localhost:5432/caie` | PostgreSQL |
+| `REDIS_URL` | `redis://localhost:6379/0` | JWT blocklist |
+| `MINIO_ENDPOINT` | `localhost:9000` | Object storage |
 | `LIGHTONOCR_SERVER_URL` | `http://localhost:8000/v1` | OCR vLLM endpoint |
+| `VLM_SERVER_URL` | `http://localhost:1234/v1` | Vision model for table validation |
+| `VLM_MODEL` | `zai-org/glm-4.6v-flash` | VLM model name |
+| `LLM_SERVER_URL` | `http://localhost:1234/v1` | Text LLM for table correction |
+| `LLM_MODEL` | `gpt-oss-20b` | LLM model name |
 
-### Minio buckets
+Minio credentials default to `minioadmin`/`minioadmin`. JWT secret defaults to `change-me-in-production`.
 
-- `caie-pdfs` — Original PDF uploads
-- `caie-pages` — Rendered page PNG images
-- `caie-output` — Extracted CSV files
+### Infrastructure
 
-### Vite proxy
-
-Dev server proxies `/api`, `/upload`, `/pages` to `http://localhost:5001` (configured in `client/vite.config.ts`).
-
-### Docker services
-
-- **postgres:16-alpine** — Port 5432, persistent volume `pgdata`
-- **redis:7-alpine** — Port 6379
-- **minio** — Ports 9000 (API), 9001 (console), volume `miniodata`
-- **server** — Port 5001, builds from `server/Dockerfile`, connects to other services via Docker network hostnames
+- **Production**: EC2 `t3.medium` (4GB RAM) at `caie.hashteelabs.com`. GPU workloads (OCR, VLM, LLM) run on RunPod, accessed via proxy URLs.
+- **SSH**: `ssh caie-cpu` (configured in SSH config)
+- **Nginx**: reverse proxy + serves client dist, HTTPS via Let's Encrypt. Reference config at `ec2/nginx.conf` — keep the deployed `/etc/nginx/sites-enabled/caie` in sync with it.
+- **SSE requires unbuffered nginx**: the `/api/uploads/<id>/status` location MUST set `proxy_buffering off`, `chunked_transfer_encoding off`, and HTTP/1.1 with empty `Connection`. Without this, nginx holds events in its buffer and the frontend appears frozen until the parse finishes (manifests as "have to refresh to see updates"). A dedicated `location ~ ^/api/uploads/[^/]+/status$` block must come *before* the generic `/api/` block.
+- **Docker compose dev override**: `docker-compose.dev.yml` remaps ports (Postgres→5434, Redis→6381, Minio→9004/9005) to avoid conflicts with other local projects
+- **Git remote**: `github.com/hollowtensor/caie` — push requires `gh auth switch --user hollowtensor`
