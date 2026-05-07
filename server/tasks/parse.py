@@ -133,25 +133,32 @@ def run_parse_job(uid: str, server_url: str, app: Flask):
 
             pdf_key = u["pdf_path"]  # Now a Minio key like "abc123.pdf"
 
-            # Step 1: Render pages as images (skip for image uploads)
+            # Step 1: Render pages as images (skip for image uploads, or if already rendered)
             if pdf_key:
-                try:
-                    db_update(uid, state="rendering", message="Rendering PDF pages...")
-
-                    pdf_bytes = storage.get_pdf(uid)
-
-                    def _on_page(page_num, total):
-                        db_update(uid, total_pages=total,
-                                  message=f"Rendered page {page_num}/{total}")
-
-                    total = render_and_save_pdf(uid, pdf_bytes, on_page=_on_page)
-                    del pdf_bytes
-
+                existing_pages = storage.list_page_images(uid)
+                if existing_pages:
+                    total = len(existing_pages)
+                    db_update(uid, total_pages=total,
+                              message=f"Reusing {total} rendered pages")
                     db_create_pages(uid, list(range(1, total + 1)))
-                    db_update(uid, message=f"Rendered {total} pages")
-                except Exception as e:
-                    db_update(uid, state="error", message=f"Render failed: {_sanitize_error(e)}")
-                    return
+                else:
+                    try:
+                        db_update(uid, state="rendering", message="Rendering PDF pages...")
+
+                        pdf_bytes = storage.get_pdf(uid)
+
+                        def _on_page(page_num, total):
+                            db_update(uid, total_pages=total,
+                                      message=f"Rendered page {page_num}/{total}")
+
+                        total = render_and_save_pdf(uid, pdf_bytes, on_page=_on_page)
+                        del pdf_bytes
+
+                        db_create_pages(uid, list(range(1, total + 1)))
+                        db_update(uid, message=f"Rendered {total} pages")
+                    except Exception as e:
+                        db_update(uid, state="error", message=f"Render failed: {_sanitize_error(e)}")
+                        return
             else:
                 # Image upload — pages already saved to Minio
                 page_files = storage.list_page_images(uid)
