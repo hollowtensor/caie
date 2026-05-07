@@ -80,7 +80,7 @@ def _clean_output(text: str) -> str:
     return result
 
 
-def parse_page(image: Image.Image, server_url: str, max_tokens: int = 8192) -> str:
+def parse_page(image: Image.Image, server_url: str, max_tokens: int = 6144) -> str:
     buf = BytesIO()
     image.save(buf, format="JPEG", quality=90)
     image_b64 = base64.b64encode(buf.getvalue()).decode()
